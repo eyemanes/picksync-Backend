@@ -1,7 +1,3 @@
-import Database from 'better-sqlite3';
-
-const db = new Database('picksync.db');
-
 // Track last scanned comment for incremental updates
 const scanState = {
   lastCommentId: null,
@@ -70,37 +66,16 @@ export function resetScanStatus() {
   };
 }
 
-// Save scan state
+// Save scan state (in-memory for now, can be persisted to DB later)
 export function saveScanState(commentId) {
   scanState.lastCommentId = commentId;
   scanState.lastScanTime = Date.now();
-  
-  // Persist to database
-  const stmt = db.prepare(`
-    INSERT OR REPLACE INTO scan_state (id, last_comment_id, last_scan_time)
-    VALUES (1, ?, ?)
-  `);
-  stmt.run(commentId, scanState.lastScanTime);
+  console.log(`💾 Saved scan state: ${commentId}`);
 }
 
 // Get last scan state
 export function getLastScanState() {
-  try {
-    const stmt = db.prepare(`
-      SELECT * FROM scan_state WHERE id = 1
-    `);
-    const state = stmt.get();
-    
-    if (state) {
-      scanState.lastCommentId = state.last_comment_id;
-      scanState.lastScanTime = state.last_scan_time;
-    }
-    
-    return scanState;
-  } catch (e) {
-    // Table doesn't exist yet
-    return { lastCommentId: null, lastScanTime: null };
-  }
+  return scanState;
 }
 
 // Filter only new comments (for incremental updates)
@@ -130,18 +105,7 @@ export function filterNewComments(allComments) {
   return newComments;
 }
 
-// Initialize scan state table
+// Initialize scan state table (no-op for in-memory, can be implemented for DB persistence)
 export function initScanStateTable() {
-  try {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS scan_state (
-        id INTEGER PRIMARY KEY,
-        last_comment_id TEXT,
-        last_scan_time INTEGER
-      )
-    `);
-    console.log('✅ Scan state table initialized');
-  } catch (e) {
-    console.error('⚠️ Scan state table error:', e.message);
-  }
+  console.log('✅ Scan state initialized (in-memory)');
 }
