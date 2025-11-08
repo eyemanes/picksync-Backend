@@ -4,9 +4,10 @@ import { schedule } from 'node-cron';
 
 const DB_PATH = './picksync.db';
 const BACKUP_DIR = './backups';
+const IS_VERCEL = process.env.VERCEL === '1' || process.env.DATABASE_URL?.includes('postgres');
 
-// Ensure backup directory exists
-if (!fs.existsSync(BACKUP_DIR)) {
+// Ensure backup directory exists (only in local dev)
+if (!IS_VERCEL && !fs.existsSync(BACKUP_DIR)) {
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
   console.log('📁 Created backup directory');
 }
@@ -15,6 +16,12 @@ if (!fs.existsSync(BACKUP_DIR)) {
  * Backup database file
  */
 export function backupDatabase() {
+  // Skip backups on Vercel (using Neon Postgres with automatic backups)
+  if (IS_VERCEL) {
+    console.log('⏭️  Skipping backup on Vercel (Neon has automatic backups)');
+    return;
+  }
+
   try {
     const timestamp = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
     const backupPath = path.join(BACKUP_DIR, `picksync-${timestamp}.db`);
@@ -41,6 +48,8 @@ export function backupDatabase() {
  * Delete backups older than 7 days
  */
 function cleanOldBackups() {
+  if (IS_VERCEL) return;
+
   try {
     const files = fs.readdirSync(BACKUP_DIR);
     const now = Date.now();
@@ -75,6 +84,11 @@ function cleanOldBackups() {
  * Schedule daily backups at 3 AM
  */
 export function startBackupScheduler() {
+  if (IS_VERCEL) {
+    console.log('⏭️  Backup scheduler disabled on Vercel (Neon has automatic backups)');
+    return;
+  }
+
   // Daily backup at 3 AM
   schedule('0 3 * * *', () => {
     console.log('\n⏰ Running scheduled database backup...');
