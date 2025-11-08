@@ -1,0 +1,6 @@
+node_modules
+.env
+.vercel
+picksync.db
+picksync.db-shm
+picksync.db-wal
