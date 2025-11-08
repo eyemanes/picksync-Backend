@@ -6,7 +6,7 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const GAMBLINA_MODEL = process.env.GAMBLINA_MODEL || 'x-ai/grok-4';
 const GAMBLINA_TEMPERATURE = parseFloat(process.env.GAMBLINA_TEMPERATURE) || 0.3;
 const GAMBLINA_MAX_TOKENS = 4000; // REDUCED from 8000 to get faster responses
-const BATCH_SIZE = 25; // REDUCED from 45 to make smaller batches
+const BATCH_SIZE = 15; // REDUCED from 25 to make Grok faster
 
 let gamblinaCallsThisMonth = 0;
 
@@ -61,11 +61,6 @@ export async function analyzeWithGamblina(allComments) {
       console.error(`❌ Batch ${batchNum + 1} failed: ${error.message}`);
       console.error(`   Continuing with remaining batches...`);
       // DON'T throw - continue with other batches
-    }
-    
-    if (batchNum < numBatches - 1) {
-      console.log('⏳ Waiting 1s before next batch...');
-      await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
   

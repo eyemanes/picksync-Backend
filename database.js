@@ -323,21 +323,28 @@ export async function savePicksForScan(scanId, picks) {
   console.log(`💾 Saving ${picks.length} picks to database...`);
   
   if (IS_VERCEL) {
-    // BATCH INSERT for Postgres - way faster than individual inserts
-    const values = picks.map(pick => 
-      `('${scanId}', '${scanDate}', ${pick.rank}, ${pick.confidence}, '${escapeSQL(pick.sport)}', '${escapeSQL(pick.event)}', '${escapeSQL(pick.pick)}', ${pick.odds ? `'${pick.odds}'` : 'NULL'}, ${pick.units}, ${pick.comment_score}, '${escapeSQL(pick.comment_author)}', '${escapeSQL(pick.comment_body)}', '${escapeSQL(pick.comment_url)}', '${escapeSQL(pick.reasoning)}', '${escapeSQL(pick.risk_factors)}', '${escapeSQL(pick.ai_analysis)}', ${pick.user_record ? `'${pick.user_record}'` : 'NULL'}, ${pick.game_time ? `'${pick.game_time}'` : 'NULL'}, ${pick.game_date ? `'${pick.game_date}'` : 'NULL'})`
-    ).join(',');
-    
-    const batchQuery = `
-      INSERT INTO picks (
-        scan_id, scan_date, rank, confidence, sport, event, pick, odds, units,
-        comment_score, comment_author, comment_body, comment_url,
-        reasoning, risk_factors, ai_analysis, user_record, game_time, game_date
-      ) VALUES ${values}
-    `;
-    
-    await pool.query(batchQuery);
-    console.log(`✅ Batch inserted ${picks.length} picks`);
+    // Use individual inserts with retry - safer than batch
+    let savedCount = 0;
+    for (const pick of picks) {
+      try {
+        await query(`
+          INSERT INTO picks (
+            scan_id, scan_date, rank, confidence, sport, event, pick, odds, units,
+            comment_score, comment_author, comment_body, comment_url,
+            reasoning, risk_factors, ai_analysis, user_record, game_time, game_date
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          scanId, scanDate, pick.rank, pick.confidence, pick.sport, pick.event,
+          pick.pick, pick.odds, pick.units, pick.comment_score, pick.comment_author,
+          pick.comment_body, pick.comment_url, pick.reasoning, pick.risk_factors,
+          pick.ai_analysis, pick.user_record, pick.game_time, pick.game_date
+        ]);
+        savedCount++;
+      } catch (error) {
+        console.error(`❌ Failed to save pick #${pick.rank}:`, error.message);
+      }
+    }
+    console.log(`✅ Saved ${savedCount}/${picks.length} picks`);
   } else {
     // SQLite - use transaction
     const insertStmt = db.prepare(`
