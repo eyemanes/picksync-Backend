@@ -191,15 +191,7 @@ Return ONLY this JSON format (no markdown, no text):
     }
     
     console.log('⏳ Reading response body...');
-    
-    // READ RESPONSE TEXT WITH TIMEOUT
-    const textPromise = response.text();
-    const textTimeout = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('response.text() timeout after 10s')), 10000)
-    );
-    
-    const responseText = await Promise.race([textPromise, textTimeout]);
-    
+    const responseText = await response.text();
     console.log(`✅ Body read: ${responseText.length} bytes`);
     
     // PARSE API RESPONSE
