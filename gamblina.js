@@ -29,13 +29,15 @@ export async function analyzeWithGamblina(allComments) {
   let allPicks = [];
   let totalTokens = 0;
 
+  // Process batches in PARALLEL to avoid sequential hanging
+  console.log('⚡ Processing all batches in parallel...');
+  
+  const batchPromises = [];
   for (let batchNum = 0; batchNum < numBatches; batchNum++) {
     const start = batchNum * BATCH_SIZE;
     const end = Math.min(start + BATCH_SIZE, allComments.length);
     const batchComments = allComments.slice(start, end);
     
-    console.log(`\n📦 Batch ${batchNum + 1}/${numBatches} (${batchComments.length} comments)...`);
-
     const commentHash = crypto
       .createHash('md5')
       .update(JSON.stringify(batchComments.map(c => ({ author: c.author, text: c.text }))))
@@ -45,23 +47,32 @@ export async function analyzeWithGamblina(allComments) {
     
     const cached = getCache(cacheKey);
     if (cached) {
-      console.log(`✨ Using cached analysis for batch ${batchNum + 1}`);
-      allPicks.push(...cached.picks);
-      continue;
+      console.log(`✨ Batch ${batchNum + 1} cached`);
+      batchPromises.push(Promise.resolve({ picks: cached.picks, tokensUsed: 0, batchNum: batchNum + 1 }));
+    } else {
+      console.log(`📦 Queuing batch ${batchNum + 1}/${numBatches} (${batchComments.length} comments)...`);
+      batchPromises.push(
+        analyzeBatch(batchComments, batchNum + 1, numBatches)
+          .then(result => {
+            setCache(cacheKey, { picks: result.picks }, 3600);
+            return { ...result, batchNum: batchNum + 1 };
+          })
+          .catch(error => {
+            console.error(`❌ Batch ${batchNum + 1} failed: ${error.message}`);
+            return { picks: [], tokensUsed: 0, batchNum: batchNum + 1 };
+          })
+      );
     }
-
-    try {
-      const result = await analyzeBatch(batchComments, batchNum + 1, numBatches);
-      allPicks.push(...result.picks);
-      totalTokens += result.tokensUsed;
-      
-      // Cache successful result
-      setCache(cacheKey, { picks: result.picks }, 3600);
-    } catch (error) {
-      console.error(`❌ Batch ${batchNum + 1} failed: ${error.message}`);
-      console.error(`   Continuing with remaining batches...`);
-      // DON'T throw - continue with other batches
-    }
+  }
+  
+  // Wait for ALL batches to complete (or fail)
+  const results = await Promise.all(batchPromises);
+  
+  // Combine all results
+  for (const result of results) {
+    console.log(`✅ Batch ${result.batchNum}: ${result.picks.length} picks`);
+    allPicks.push(...result.picks);
+    totalTokens += result.tokensUsed;
   }
   
   console.log(`🔍 Enriching ${allPicks.length} picks with comment data...`);
