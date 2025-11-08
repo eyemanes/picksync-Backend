@@ -29,15 +29,16 @@ export async function analyzeWithGamblina(allComments) {
   let allPicks = [];
   let totalTokens = 0;
 
-  // Process batches in PARALLEL to avoid sequential hanging
-  console.log('⚡ Processing all batches in parallel...');
-  
-  const batchPromises = [];
+  // Process batches SEQUENTIALLY with detailed logging
   for (let batchNum = 0; batchNum < numBatches; batchNum++) {
     const start = batchNum * BATCH_SIZE;
     const end = Math.min(start + BATCH_SIZE, allComments.length);
     const batchComments = allComments.slice(start, end);
     
+    console.log(`\n📦 ===== BATCH ${batchNum + 1}/${numBatches} START =====`);
+    console.log(`📊 Comments: ${batchComments.length}`);
+    console.log(`⏱️  Time: ${new Date().toISOString()}`);
+
     const commentHash = crypto
       .createHash('md5')
       .update(JSON.stringify(batchComments.map(c => ({ author: c.author, text: c.text }))))
@@ -47,32 +48,37 @@ export async function analyzeWithGamblina(allComments) {
     
     const cached = getCache(cacheKey);
     if (cached) {
-      console.log(`✨ Batch ${batchNum + 1} cached`);
-      batchPromises.push(Promise.resolve({ picks: cached.picks, tokensUsed: 0, batchNum: batchNum + 1 }));
-    } else {
-      console.log(`📦 Queuing batch ${batchNum + 1}/${numBatches} (${batchComments.length} comments)...`);
-      batchPromises.push(
-        analyzeBatch(batchComments, batchNum + 1, numBatches)
-          .then(result => {
-            setCache(cacheKey, { picks: result.picks }, 3600);
-            return { ...result, batchNum: batchNum + 1 };
-          })
-          .catch(error => {
-            console.error(`❌ Batch ${batchNum + 1} failed: ${error.message}`);
-            return { picks: [], tokensUsed: 0, batchNum: batchNum + 1 };
-          })
-      );
+      console.log(`✨ Cache HIT - skipping Grok call`);
+      allPicks.push(...cached.picks);
+      console.log(`✅ Batch ${batchNum + 1} complete: ${cached.picks.length} picks from cache`);
+      console.log(`📦 ===== BATCH ${batchNum + 1}/${numBatches} END =====\n`);
+      continue;
     }
-  }
-  
-  // Wait for ALL batches to complete (or fail)
-  const results = await Promise.all(batchPromises);
-  
-  // Combine all results
-  for (const result of results) {
-    console.log(`✅ Batch ${result.batchNum}: ${result.picks.length} picks`);
-    allPicks.push(...result.picks);
-    totalTokens += result.tokensUsed;
+
+    try {
+      console.log(`🚀 Calling Grok for batch ${batchNum + 1}...`);
+      const batchStart = Date.now();
+      
+      const result = await analyzeBatch(batchComments, batchNum + 1, numBatches);
+      
+      const batchDuration = ((Date.now() - batchStart) / 1000).toFixed(1);
+      console.log(`✅ Batch ${batchNum + 1} complete: ${result.picks.length} picks in ${batchDuration}s`);
+      
+      allPicks.push(...result.picks);
+      totalTokens += result.tokensUsed;
+      
+      // Cache successful result
+      setCache(cacheKey, { picks: result.picks }, 3600);
+      
+      console.log(`💾 Batch ${batchNum + 1} cached for 1 hour`);
+      console.log(`📦 ===== BATCH ${batchNum + 1}/${numBatches} END =====\n`);
+      
+    } catch (error) {
+      console.error(`❌ Batch ${batchNum + 1} FAILED: ${error.message}`);
+      console.error(`🔍 Stack: ${error.stack}`);
+      console.error(`📦 ===== BATCH ${batchNum + 1}/${numBatches} END (FAILED) =====\n`);
+      // Continue with other batches
+    }
   }
   
   console.log(`🔍 Enriching ${allPicks.length} picks with comment data...`);
