@@ -226,7 +226,7 @@ Only EXCLUDE:
 REDDIT COMMENTS TO ANALYZE:
 ${JSON.stringify(formattedComments, null, 2)}
 
-Return ONLY valid JSON array. Extract MOST legitimate picks - we want good volume with accurate confidence ratings:`;
+Return ONLY valid JSON array. Extract ALL legitimate picks - we want good volume with accurate confidence ratings:`;
 
   console.log(`📤 Sending batch ${batchNum} to Gamblina...`);
   console.log(`📏 Input tokens: ~${Math.ceil(prompt.length / 4)}`);
@@ -251,7 +251,7 @@ Return ONLY valid JSON array. Extract MOST legitimate picks - we want good volum
         messages: [
           {
             role: 'system',
-            content: 'You are GAMBLINA, a professional sports bettor and sharp handicapper. You analyze picks like a Vegas pro - finding edges, identifying value, and cutting through the noise. Return ONLY valid JSON array with NO text before or after. Your reasoning should be analytical, specific, and backed by stats. Be selective - only include picks with genuine edges.'
+            content: 'You are GAMBLINA, a professional sports bettor and sharp handicapper. You analyze picks like a Vegas pro - finding edges, identifying value, and cutting through the noise. Return ONLY valid JSON array with NO text before or after. Your reasoning should be analytical, specific, and backed by stats. EXTRACT ALL LEGITIMATE PICKS from the comments - include every pick that has actual reasoning, even casual ones. Rate each honestly with accurate confidence scores. We want volume and accuracy.'
           },
           { role: 'user', content: prompt }
         ],
