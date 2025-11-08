@@ -203,15 +203,13 @@ export function getTodaysPicks() {
 
 // Get CURRENT POTD picks only
 export async function getCurrentPOTDPicks() {
-  const isCurrent = IS_VERCEL ? 'true' : '1';
-  
   const picks = await query(`
     SELECT p.*, s.potd_title, s.potd_date, s.id as scanId
     FROM picks p
     INNER JOIN scans s ON p.scan_id = s.id
-    WHERE s.is_current = ${isCurrent}
+    WHERE s.is_current = ?
     ORDER BY p.confidence DESC, p.rank ASC
-  `);
+  `, [true]);
   
   if (picks.length === 0) {
     return { picks: [], potdTitle: '', potdDate: '', scanId: null };
@@ -227,15 +225,13 @@ export async function getCurrentPOTDPicks() {
 
 // Get HISTORY POTDs
 export async function getHistoryPOTDs() {
-  const isCurrent = IS_VERCEL ? 'false' : '0';
-  
   return await query(`
     SELECT DISTINCT s.id, s.potd_title, s.potd_date, s.scan_date, s.total_picks, s.created_at
     FROM scans s
-    WHERE s.is_current = ${isCurrent}
+    WHERE s.is_current = ?
     ORDER BY s.created_at DESC
     LIMIT 50
-  `);
+  `, [false]);
 }
 
 // Save scan
