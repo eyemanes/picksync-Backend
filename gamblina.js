@@ -185,18 +185,15 @@ Return ONLY this JSON format (no markdown, no text):
       throw new Error(`Gamblina API error: ${response.status}`);
     }
     
-    console.log('⏳ Reading response body...');
-    const responseText = await response.text();
-    console.log(`✅ Body read: ${responseText.length} bytes`);
+    console.log('⏳ Parsing response...');
     
-    // PARSE API RESPONSE
+    // Parse JSON directly - skip response.text() which hangs on Vercel
     let data;
     try {
-      data = JSON.parse(responseText);
-      console.log('✅ API JSON parsed');
+      data = await response.json();
+      console.log('✅ Response parsed directly');
     } catch (jsonError) {
-      console.error('❌ Invalid API JSON:', jsonError.message);
-      console.error('📄 Response preview:', responseText.substring(0, 500));
+      console.error('❌ Invalid JSON response:', jsonError.message);
       throw new Error('Invalid JSON from API');
     }
     
