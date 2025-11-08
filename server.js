@@ -397,14 +397,34 @@ app.post('/api/chat', verifyToken, async (req, res) => {
   try {
     const { message } = req.body;
     
-    const stats = await getPickStats();
+    // Get REAL picks from database
     const currentPicks = await getCurrentPOTDPicks();
-    const recentPicks = currentPicks.picks?.slice(0, 5) || [];
+    const stats = await getPickStats();
+    
+    // Format picks for context
+    const picksContext = currentPicks.picks?.slice(0, 10).map(p => ({
+      rank: p.rank,
+      confidence: p.confidence,
+      sport: p.sport,
+      event: p.event,
+      pick: p.pick,
+      odds: p.odds,
+      poster: p.comment_author,
+      record: p.user_record,
+      reasoning: p.reasoning?.substring(0, 200) // Shortened for token efficiency
+    })) || [];
     
     const context = {
       stats: stats.overall,
-      recentPicks,
+      currentPicks: picksContext,
+      totalPicks: currentPicks.picks?.length || 0,
+      potdTitle: currentPicks.potdTitle || 'No picks yet',
     };
+
+    console.log('💬 Chat context:', {
+      totalPicks: context.totalPicks,
+      topPick: picksContext[0]?.pick || 'none'
+    });
 
     const aiResponse = await chatWithGamblina(message, context);
     await saveChatMessage(message, aiResponse, context);

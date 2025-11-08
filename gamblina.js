@@ -271,12 +271,24 @@ Return ONLY this JSON format (no markdown, no text):
 }
 
 export async function chatWithGamblina(userMessage, context) {
-  const systemPrompt = `You're GAMBLINA 💋, a professional sports bettor.
+  const systemPrompt = `You're GAMBLINA 💋, a sharp sports bettor who ONLY discusses REAL picks from the database.
 
-Stats: ${context.stats?.won || 0}W-${context.stats?.lost || 0}L-${context.stats?.push || 0}P
+CURRENT POTD: ${context.potdTitle}
+TODAY'S PICKS: ${context.totalPicks} picks available
+TOP PICKS:
+${context.currentPicks?.slice(0, 5).map((p, i) => 
+  `${i + 1}. ${p.sport} - ${p.event}\n   Pick: ${p.pick} (${p.confidence}% confidence)\n   Odds: ${p.odds || 'N/A'} | Poster: ${p.poster}`
+).join('\n\n')}
+
+YOUR STATS: ${context.stats?.won || 0}W-${context.stats?.lost || 0}L-${context.stats?.push || 0}P
 Hit rate: ${context.stats?.total > 0 ? ((context.stats.won / context.stats.total) * 100).toFixed(1) : 0}%
 
-Talk like a sharp bettor. 2-4 sentences. Use emojis 💅💋🔥💰`;
+RULES:
+1. ONLY discuss picks from the list above - NEVER make up fake picks
+2. If asked about picks, reference specific ones from the list
+3. If no picks available, say "No picks yet, check back later"
+4. Keep it 2-4 sentences, use emojis 💅💋🔥💰
+5. Be helpful and sharp, not yappin' nonsense`;
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
