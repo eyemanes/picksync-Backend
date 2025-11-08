@@ -3,7 +3,7 @@ import bcrypt from 'bcrypt';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'Admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Cwil@gamble.2025';
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH;
 
 // In-memory user store (replace with database in production)
 let users = [];
@@ -12,8 +12,8 @@ let users = [];
 if (!process.env.JWT_SECRET) {
   console.warn('⚠️  WARNING: Using default JWT_SECRET. Set JWT_SECRET in .env for production!');
 }
-if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
-  console.warn('⚠️  WARNING: Using default admin credentials. Set ADMIN_USERNAME and ADMIN_PASSWORD in .env!');
+if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD_HASH) {
+  console.warn('⚠️  WARNING: Admin credentials not set. Set ADMIN_USERNAME and ADMIN_PASSWORD_HASH in .env!');
 }
 
 // Initialize users table (create default admin)
@@ -26,7 +26,7 @@ export async function initUsersTable() {
     users.push({
       id: 1,
       username: ADMIN_USERNAME,
-      password: ADMIN_PASSWORD, // In production, hash this!
+      passwordHash: ADMIN_PASSWORD_HASH,
       role: 'admin',
       createdAt: new Date().toISOString()
     });
@@ -47,15 +47,18 @@ export function getAllUsers() {
 }
 
 // Create new user
-export function createUser(username, password, role = 'gambler') {
+export async function createUser(username, password, role = 'gambler') {
   if (users.find(u => u.username === username)) {
     return { success: false, error: 'Username already exists' };
   }
   
+  // Hash password with bcrypt
+  const passwordHash = await bcrypt.hash(password, 10);
+  
   const newUser = {
     id: users.length + 1,
     username,
-    password, // In production, hash this!
+    passwordHash,
     role,
     createdAt: new Date().toISOString()
   };
@@ -101,10 +104,17 @@ export function deleteUser(userId) {
 }
 
 // Login
-export function login(username, password) {
-  const user = users.find(u => u.username === username && u.password === password);
+export async function login(username, password) {
+  const user = users.find(u => u.username === username);
   
-  if (user) {
+  if (!user) {
+    return { success: false, message: 'Invalid credentials' };
+  }
+  
+  // Compare password with bcrypt
+  const isValid = await bcrypt.compare(password, user.passwordHash);
+  
+  if (isValid) {
     const token = jwt.sign(
       { id: user.id, username: user.username, role: user.role },
       JWT_SECRET,

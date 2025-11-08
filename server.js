@@ -119,9 +119,9 @@ app.get('/health', (req, res) => {
 });
 
 // Login
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
-  const result = login(username, password);
+  const result = await login(username, password);
   res.json(result);
 });
 
@@ -514,7 +514,7 @@ app.get('/api/admin/users', verifyToken, requireAdmin, (req, res) => {
   }
 });
 
-app.post('/api/admin/users', verifyToken, requireAdmin, (req, res) => {
+app.post('/api/admin/users', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { username, password, role } = req.body;
     
@@ -522,7 +522,7 @@ app.post('/api/admin/users', verifyToken, requireAdmin, (req, res) => {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
     
-    const user = createUser(username, password, role);
+    const user = await createUser(username, password, role);
     res.json({ success: true, user });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
