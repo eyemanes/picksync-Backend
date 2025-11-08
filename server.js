@@ -54,7 +54,8 @@ app.use(cors({
   origin: [
     'http://localhost:3000',
     'http://localhost:5173',
-    'https://picksync-frontend-k8an.vercel.app'
+    'https://picksync-frontend-k8an.vercel.app',
+    'https://picksync-frontend.vercel.app'
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
