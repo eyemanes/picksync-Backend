@@ -2,7 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
-import { chatWithGamblina, getGamblinaUsageStats } from './gamblina.js';
+import { chatWithGamblina, getGamblinaUsageStats, analyzeWithGamblina } from './gamblina.js';
+import { getPOTDData } from './reddit.js';
 import {
   initDatabase,
   getAllScans,
@@ -24,6 +25,8 @@ import {
   optimizeDatabase,
   removeDuplicates,
   deletePick,
+  saveScan,
+  savePicksForScan,
 } from './database.js';
 import { login, verifyToken, requireAdmin, initUsersTable, getAllUsers, createUser, updateUserRole, deleteUser } from './auth.js';
 import { rateLimit } from './rateLimit.js';
@@ -207,6 +210,108 @@ app.post('/api/scan', rateLimit(15 * 60 * 1000, 5), verifyToken, requireAdmin, a
   runScan().catch(error => {
     console.error('❌ Manual scan failed:', error);
   });
+});
+
+// NEW: Step 1 - Prepare scan (fetch Reddit only)
+app.post('/api/scan/prepare', rateLimit(15 * 60 * 1000, 5), verifyToken, requireAdmin, async (req, res) => {
+  try {
+    console.log('\n📡 PREPARING SCAN - Fetching Reddit comments...');
+    const potdData = await getPOTDData();
+    
+    const scanId = `scan_${Date.now()}`;
+    const BATCH_SIZE = 15;
+    const numBatches = Math.ceil(potdData.allComments.length / BATCH_SIZE);
+    
+    // Store in memory temporarily
+    global.pendingScan = {
+      scanId,
+      potdData,
+      numBatches,
+      batchSize: BATCH_SIZE,
+      timestamp: Date.now()
+    };
+    
+    console.log(`✅ Scan prepared: ${potdData.allComments.length} comments, ${numBatches} batches`);
+    
+    res.json({
+      success: true,
+      scanId,
+      totalComments: potdData.allComments.length,
+      commentsWithRecords: potdData.allComments.filter(c => c.record).length,
+      numBatches,
+      batchSize: BATCH_SIZE,
+      potdTitle: potdData.title,
+      potdUrl: potdData.url
+    });
+  } catch (error) {
+    console.error('❌ Prepare failed:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// NEW: Step 2 - Process ONE batch
+app.post('/api/scan/process-batch', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { scanId, batchNum } = req.body;
+    
+    if (!global.pendingScan || global.pendingScan.scanId !== scanId) {
+      return res.status(400).json({ success: false, error: 'No pending scan found. Call /prepare first.' });
+    }
+    
+    const { potdData, numBatches, batchSize } = global.pendingScan;
+    
+    if (batchNum < 1 || batchNum > numBatches) {
+      return res.status(400).json({ success: false, error: 'Invalid batch number' });
+    }
+    
+    console.log(`\n📦 Processing batch ${batchNum}/${numBatches}...`);
+    
+    const start = (batchNum - 1) * batchSize;
+    const end = Math.min(start + batchSize, potdData.allComments.length);
+    const batchComments = potdData.allComments.slice(start, end);
+    
+    // Analyze this batch
+    const { analyzedPicks, tokensUsed } = await analyzeWithGamblina(batchComments);
+    
+    // If this is the first batch, save scan metadata
+    if (batchNum === 1) {
+      saveScan({
+        id: scanId,
+        potdTitle: potdData.title,
+        potdUrl: potdData.url,
+        totalComments: potdData.allComments.length,
+        totalPicks: 0, // Will update later
+        scanDuration: 0,
+        status: 'in_progress',
+      });
+    }
+    
+    // Save picks for this batch
+    await savePicksForScan(scanId, analyzedPicks);
+    
+    console.log(`✅ Batch ${batchNum} complete: ${analyzedPicks.length} picks saved`);
+    
+    // If this is the last batch, clean up and finalize
+    if (batchNum === numBatches) {
+      delete global.pendingScan;
+      clearCache();
+      deleteCache(CACHE_KEYS.TODAY_PICKS);
+      console.log('✅ All batches complete!');
+    }
+    
+    res.json({
+      success: true,
+      batchNum,
+      totalBatches: numBatches,
+      picksInBatch: analyzedPicks.length,
+      tokensUsed,
+      isLastBatch: batchNum === numBatches
+    });
+    
+  } catch (error) {
+    console.error(`❌ Batch ${req.body.batchNum} failed:`, error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // Get all scans (archives) with caching
