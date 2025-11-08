@@ -388,10 +388,13 @@ export async function updatePickResult(pickId, result, notes = null) {
 
 // Update user action
 export async function updateUserAction(pickId, action) {
-  await query(
+  console.log(`🎯 Updating pick ${pickId} action to: ${action}`);
+  const result = await query(
     `UPDATE picks SET user_action = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
     [action, pickId]
   );
+  console.log(`✅ Pick ${pickId} action updated to ${action}`);
+  return result;
 }
 
 // Update game time
@@ -412,9 +415,12 @@ export async function getFinishedPicks(limit = 100) {
 
 // Get my bets
 export async function getMyBets() {
-  return await query(
+  console.log('📊 Fetching my bets...');
+  const picks = await query(
     `SELECT * FROM picks WHERE user_action IN ('hit', 'track') ORDER BY created_at DESC`
   );
+  console.log(`📊 Found ${picks.length} bets (hit/track)`);
+  return picks;
 }
 
 // Get picks by date

@@ -58,7 +58,7 @@ app.use(cors({
     'https://picksync-frontend.vercel.app'
   ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(compression());
@@ -397,8 +397,9 @@ app.post('/api/chat', verifyToken, async (req, res) => {
   try {
     const { message } = req.body;
     
-    const stats = getPickStats();
-    const recentPicks = getTodaysPicks().slice(0, 5);
+    const stats = await getPickStats();
+    const currentPicks = await getCurrentPOTDPicks();
+    const recentPicks = currentPicks.picks?.slice(0, 5) || [];
     
     const context = {
       stats: stats.overall,
@@ -406,11 +407,12 @@ app.post('/api/chat', verifyToken, async (req, res) => {
     };
 
     const aiResponse = await chatWithGamblina(message, context);
-    saveChatMessage(message, aiResponse, context);
+    await saveChatMessage(message, aiResponse, context);
     deleteCache(CACHE_KEYS.CHAT_HISTORY);
     
     res.json({ success: true, response: aiResponse });
   } catch (error) {
+    console.error('❌ Chat error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
