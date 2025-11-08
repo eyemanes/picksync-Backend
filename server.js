@@ -140,9 +140,9 @@ app.get('/api/picks/today', async (req, res) => {
       });
     }
 
-    const result = getCurrentPOTDPicks();
+    const result = await getCurrentPOTDPicks();
     
-    if (result.picks.length > 0) {
+    if (result && result.picks && result.picks.length > 0) {
       setCache(CACHE_KEYS.TODAY_PICKS, result, CACHE_TTL.TODAY_PICKS);
       
       return res.json({
