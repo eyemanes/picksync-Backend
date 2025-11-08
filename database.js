@@ -1,14 +1,21 @@
-// Database wrapper - works with SQLite (local) and Postgres (Vercel)
+// Database wrapper - works with SQLite (local) and Neon Postgres (Vercel)
 import Database from 'better-sqlite3';
-import { sql } from '@vercel/postgres';
+import pkg from 'pg';
+const { Pool } = pkg;
 
 const IS_VERCEL = process.env.VERCEL === '1' || process.env.DATABASE_URL?.includes('postgres');
 
 let db;
+let pool;
 
 if (IS_VERCEL) {
-  console.log('🔗 Using Vercel Postgres (Production)');
-  db = sql;
+  console.log('🔗 Using Neon Postgres (Production)');
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false
+    }
+  });
 } else {
   console.log('🔗 Using SQLite (Local Development)');
   db = new Database('picksync.db');
@@ -18,18 +25,14 @@ if (IS_VERCEL) {
   db.pragma('temp_store = MEMORY');
 }
 
-// Helper to run queries that work on both databases
+// Helper to run queries
 async function query(sqlQuery, params = []) {
   if (IS_VERCEL) {
-    // Postgres
-    if (params.length === 0) {
-      return await sql.query(sqlQuery);
-    }
-    
-    // Convert ? placeholders to $1, $2, etc for Postgres
+    // Convert ? to $1, $2, etc for Postgres
     let paramIndex = 1;
     const pgQuery = sqlQuery.replace(/\?/g, () => `$${paramIndex++}`);
-    return await sql.query(pgQuery, params);
+    const result = await pool.query(pgQuery, params);
+    return result.rows;
   } else {
     // SQLite
     if (sqlQuery.toLowerCase().includes('select')) {
@@ -43,19 +46,12 @@ async function query(sqlQuery, params = []) {
 // Helper to get a single row
 async function queryOne(sqlQuery, params = []) {
   if (IS_VERCEL) {
-    const result = await query(sqlQuery, params);
+    let paramIndex = 1;
+    const pgQuery = sqlQuery.replace(/\?/g, () => `$${paramIndex++}`);
+    const result = await pool.query(pgQuery, params);
     return result.rows[0];
   } else {
     return db.prepare(sqlQuery).get(...params);
-  }
-}
-
-// Helper to run without returning data
-async function exec(sqlQuery) {
-  if (IS_VERCEL) {
-    await sql.query(sqlQuery);
-  } else {
-    db.exec(sqlQuery);
   }
 }
 
@@ -78,12 +74,11 @@ function extractPOTDDate(potdTitle) {
   return new Date().toLocaleDateString('en-US');
 }
 
-// Initialize database (auto-runs on import)
+// Initialize database
 export async function initDatabase() {
   try {
     if (IS_VERCEL) {
-      console.log('✅ Database initialized (Vercel Postgres)');
-      // Tables should already exist from vercel-postgres-schema.sql
+      console.log('✅ Database initialized (Neon Postgres)');
       return;
     }
     
@@ -174,26 +169,24 @@ export async function initDatabase() {
 
 // Get all scans
 export async function getAllScans(limit = 50, offset = 0) {
-  const scans = await query(
+  return await query(
     `SELECT id, potd_title, scan_date, potd_date, total_picks, status, created_at, is_current
      FROM scans 
      ORDER BY created_at DESC 
      LIMIT ? OFFSET ?`,
     [limit, offset]
   );
-  return IS_VERCEL ? scans.rows : scans;
 }
 
 // Get picks by scan ID
 export async function getPicksByScanId(scanId) {
-  const picks = await query(
+  return await query(
     `SELECT * FROM picks WHERE scan_id = ? ORDER BY confidence DESC, rank ASC`,
     [scanId]
   );
-  return IS_VERCEL ? picks.rows : picks;
 }
 
-// Get today's picks (all picks from most recent scan)
+// Get today's picks (SQLite only)
 export function getTodaysPicks() {
   if (IS_VERCEL) {
     throw new Error('Use getCurrentPOTDPicks() for Vercel');
@@ -210,294 +203,222 @@ export function getTodaysPicks() {
 
 // Get CURRENT POTD picks only
 export async function getCurrentPOTDPicks() {
-  const query = `
+  const isCurrent = IS_VERCEL ? 'true' : '1';
+  
+  const picks = await query(`
     SELECT p.*, s.potd_title, s.potd_date, s.id as scanId
     FROM picks p
     INNER JOIN scans s ON p.scan_id = s.id
-    WHERE s.is_current = ${IS_VERCEL ? 'true' : '1'}
+    WHERE s.is_current = ${isCurrent}
     ORDER BY p.confidence DESC, p.rank ASC
-  `;
+  `);
   
-  if (IS_VERCEL) {
-    const result = await sql.query(query);
-    const picks = result.rows;
-    
-    if (picks.length === 0) {
-      return { picks: [], potdTitle: '', potdDate: '', scanId: null };
-    }
-    
-    return {
-      picks,
-      potdTitle: picks[0].potd_title,
-      potdDate: picks[0].potd_date,
-      scanId: picks[0].scanid,
-    };
-  } else {
-    const picks = db.prepare(query).all();
-    
-    if (picks.length === 0) {
-      return { picks: [], potdTitle: '', potdDate: '', scanId: null };
-    }
-    
-    return {
-      picks,
-      potdTitle: picks[0].potd_title,
-      potdDate: picks[0].potd_date,
-      scanId: picks[0].scanId,
-    };
+  if (picks.length === 0) {
+    return { picks: [], potdTitle: '', potdDate: '', scanId: null };
   }
+  
+  return {
+    picks,
+    potdTitle: picks[0].potd_title,
+    potdDate: picks[0].potd_date,
+    scanId: picks[0].scanid || picks[0].scanId,
+  };
 }
 
-// Get HISTORY POTDs (old POTDs, not current)
+// Get HISTORY POTDs
 export async function getHistoryPOTDs() {
-  const query = `
+  const isCurrent = IS_VERCEL ? 'false' : '0';
+  
+  return await query(`
     SELECT DISTINCT s.id, s.potd_title, s.potd_date, s.scan_date, s.total_picks, s.created_at
     FROM scans s
-    WHERE s.is_current = ${IS_VERCEL ? 'false' : '0'}
+    WHERE s.is_current = ${isCurrent}
     ORDER BY s.created_at DESC
     LIMIT 50
-  `;
-  
-  if (IS_VERCEL) {
-    const result = await sql.query(query);
-    return result.rows;
-  } else {
-    return db.prepare(query).all();
-  }
+  `);
 }
 
 // Save scan
-export function saveScan(scanData) {
-  if (IS_VERCEL) {
-    throw new Error('Use savePicksForScan() for Vercel (async)');
-  }
-  
+export async function saveScan(scanData) {
   const potdDate = extractPOTDDate(scanData.potdTitle);
-  
-  // Check if we already have a CURRENT POTD for today
-  const existingCurrent = db.prepare(`
-    SELECT id, potd_date FROM scans WHERE is_current = 1
-  `).get();
-  
-  if (existingCurrent && existingCurrent.potd_date !== potdDate) {
-    console.log(`🆕 New POTD detected (${potdDate}) - moving old POTD to history`);
-    db.prepare(`UPDATE scans SET is_current = 0 WHERE is_current = 1`).run();
-  }
-  
   const scanDate = new Date().toISOString().split('T')[0];
   
-  db.prepare(`
-    INSERT INTO scans (id, potd_title, potd_url, potd_date, scan_date, total_comments, total_picks, scan_duration, status, is_current)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-  `).run(
-    scanData.id,
-    scanData.potdTitle,
-    scanData.potdUrl,
-    potdDate,
-    scanDate,
-    scanData.totalComments,
-    scanData.totalPicks,
-    scanData.scanDuration,
-    scanData.status
-  );
+  if (IS_VERCEL) {
+    // Check for existing current POTD
+    const existingCurrent = await queryOne(`SELECT id, potd_date FROM scans WHERE is_current = true`);
+    
+    if (existingCurrent && existingCurrent.potd_date !== potdDate) {
+      console.log(`🆕 New POTD detected (${potdDate}) - moving old POTD to history`);
+      await query(`UPDATE scans SET is_current = false WHERE is_current = true`);
+    }
+    
+    await query(`
+      INSERT INTO scans (id, potd_title, potd_url, potd_date, scan_date, total_comments, total_picks, scan_duration, status, is_current)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true)
+    `, [
+      scanData.id,
+      scanData.potdTitle,
+      scanData.potdUrl,
+      potdDate,
+      scanDate,
+      scanData.totalComments,
+      scanData.totalPicks,
+      scanData.scanDuration,
+      scanData.status
+    ]);
+  } else {
+    // SQLite version
+    const existingCurrent = db.prepare(`SELECT id, potd_date FROM scans WHERE is_current = 1`).get();
+    
+    if (existingCurrent && existingCurrent.potd_date !== potdDate) {
+      console.log(`🆕 New POTD detected (${potdDate}) - moving old POTD to history`);
+      db.prepare(`UPDATE scans SET is_current = 0 WHERE is_current = 1`).run();
+    }
+    
+    db.prepare(`
+      INSERT INTO scans (id, potd_title, potd_url, potd_date, scan_date, total_comments, total_picks, scan_duration, status, is_current)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `).run(
+      scanData.id,
+      scanData.potdTitle,
+      scanData.potdUrl,
+      potdDate,
+      scanDate,
+      scanData.totalComments,
+      scanData.totalPicks,
+      scanData.scanDuration,
+      scanData.status
+    );
+  }
   
   console.log(`✅ Scan ${scanData.id} saved as CURRENT for ${potdDate}`);
 }
 
 // Save picks for scan
 export async function savePicksForScan(scanId, picks) {
-  if (IS_VERCEL) {
-    // Postgres version
-    const scanInfo = await sql.query(`SELECT potd_title, potd_date FROM scans WHERE id = $1`, [scanId]);
-    const potdTitle = scanInfo.rows[0]?.potd_title || '';
-    const potdDate = extractPOTDDate(potdTitle);
-    const scanDate = new Date().toISOString().split('T')[0];
-    
-    // Check for existing current POTD
-    const existingCurrent = await sql.query(`SELECT id, potd_date FROM scans WHERE is_current = true`);
-    
-    if (existingCurrent.rows.length > 0 && existingCurrent.rows[0].potd_date !== potdDate) {
-      console.log(`🆕 New POTD detected (${potdDate}) - moving old POTD to history`);
-      await sql.query(`UPDATE scans SET is_current = false WHERE is_current = true`);
-    }
-    
-    // Insert picks
-    let savedCount = 0;
-    let duplicateCount = 0;
-    
-    for (const pick of picks) {
-      try {
-        await sql.query(`
-          INSERT INTO picks (
-            scan_id, scan_date, rank, confidence, sport, event, pick, odds, units,
-            comment_score, comment_author, comment_body, comment_url,
-            reasoning, risk_factors, ai_analysis, user_record
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-        `, [
-          scanId, scanDate, pick.rank, pick.confidence, pick.sport, pick.event,
-          pick.pick, pick.odds, pick.units, pick.comment_score, pick.comment_author,
-          pick.comment_body, pick.comment_url, pick.reasoning, pick.risk_factors,
-          pick.ai_analysis, pick.user_record
-        ]);
-        savedCount++;
-      } catch (error) {
-        if (error.message.includes('duplicate')) {
-          duplicateCount++;
-        } else {
-          throw error;
-        }
-      }
-    }
-    
-    console.log(`✅ Saved ${savedCount} picks (${duplicateCount} duplicates skipped)`);
-    return;
-  }
-  
-  // SQLite version
-  const scanInfo = db.prepare(`SELECT potd_title FROM scans WHERE id = ?`).get(scanId);
-  const potdDate = extractPOTDDate(scanInfo?.potd_title || '');
   const scanDate = new Date().toISOString().split('T')[0];
-  
-  const insertStmt = db.prepare(`
-    INSERT INTO picks (
-      scan_id, scan_date, rank, confidence, sport, event, pick, odds, units,
-      comment_score, comment_author, comment_body, comment_url,
-      reasoning, risk_factors, ai_analysis, user_record
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  
   let savedCount = 0;
   let duplicateCount = 0;
   
-  const insertMany = db.transaction((picks) => {
-    for (const pick of picks) {
-      try {
-        insertStmt.run(
-          scanId, scanDate, pick.rank, pick.confidence, pick.sport, pick.event,
-          pick.pick, pick.odds, pick.units, pick.comment_score, pick.comment_author,
-          pick.comment_body, pick.comment_url, pick.reasoning, pick.risk_factors,
-          pick.ai_analysis, pick.user_record
-        );
-        savedCount++;
-      } catch (error) {
-        if (error.message.includes('UNIQUE constraint')) {
-          duplicateCount++;
-        } else {
-          throw error;
-        }
+  for (const pick of picks) {
+    try {
+      await query(`
+        INSERT INTO picks (
+          scan_id, scan_date, rank, confidence, sport, event, pick, odds, units,
+          comment_score, comment_author, comment_body, comment_url,
+          reasoning, risk_factors, ai_analysis, user_record
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        scanId, scanDate, pick.rank, pick.confidence, pick.sport, pick.event,
+        pick.pick, pick.odds, pick.units, pick.comment_score, pick.comment_author,
+        pick.comment_body, pick.comment_url, pick.reasoning, pick.risk_factors,
+        pick.ai_analysis, pick.user_record
+      ]);
+      savedCount++;
+    } catch (error) {
+      if (error.message.includes('duplicate') || error.message.includes('UNIQUE')) {
+        duplicateCount++;
+      } else {
+        throw error;
       }
     }
-  });
+  }
   
-  insertMany(picks);
   console.log(`✅ Saved ${savedCount} picks (${duplicateCount} duplicates skipped)`);
 }
 
 // Update pick result
 export async function updatePickResult(pickId, result, notes = null) {
-  const query = `UPDATE picks SET result = ?, result_notes = ?, updated_at = ${IS_VERCEL ? 'CURRENT_TIMESTAMP' : 'CURRENT_TIMESTAMP'} WHERE id = ?`;
-  
-  if (IS_VERCEL) {
-    await sql.query(query.replace(/\?/g, (_, i) => `$${i + 1}`), [result, notes, pickId]);
-    return true;
-  } else {
-    const result = db.prepare(query).run(result, notes, pickId);
-    return result.changes > 0;
-  }
+  await query(
+    `UPDATE picks SET result = ?, result_notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [result, notes, pickId]
+  );
+  return true;
 }
 
 // Update user action
 export async function updateUserAction(pickId, action) {
-  const query = `UPDATE picks SET user_action = ?, updated_at = ${IS_VERCEL ? 'CURRENT_TIMESTAMP' : 'CURRENT_TIMESTAMP'} WHERE id = ?`;
-  
-  if (IS_VERCEL) {
-    await sql.query(query.replace(/\?/g, (_, i) => `$${i + 1}`), [action, pickId]);
-  } else {
-    db.prepare(query).run(action, pickId);
-  }
+  await query(
+    `UPDATE picks SET user_action = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [action, pickId]
+  );
+}
+
+// Update game time
+export async function updateGameTime(pickId, gameTime, gameDate) {
+  await query(
+    `UPDATE picks SET game_time = ?, game_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [gameTime, gameDate, pickId]
+  );
 }
 
 // Get finished picks
 export async function getFinishedPicks(limit = 100) {
-  const query = `
-    SELECT * FROM picks 
-    WHERE result IN ('won', 'lost', 'push')
-    ORDER BY updated_at DESC
-    LIMIT ?
-  `;
-  
-  if (IS_VERCEL) {
-    const result = await sql.query(query.replace('?', '$1'), [limit]);
-    return result.rows;
-  } else {
-    return db.prepare(query).all(limit);
-  }
+  return await query(
+    `SELECT * FROM picks WHERE result IN ('won', 'lost', 'push') ORDER BY updated_at DESC LIMIT ?`,
+    [limit]
+  );
 }
 
-// Get my bets (HIT + TRACK)
+// Get my bets
 export async function getMyBets() {
-  const query = `
-    SELECT * FROM picks 
-    WHERE user_action IN ('hit', 'track')
-    ORDER BY created_at DESC
-  `;
-  
-  if (IS_VERCEL) {
-    const result = await sql.query(query);
-    return result.rows;
-  } else {
-    return db.prepare(query).all();
-  }
+  return await query(
+    `SELECT * FROM picks WHERE user_action IN ('hit', 'track') ORDER BY created_at DESC`
+  );
 }
 
-// Get picks stats
+// Get picks by date
+export async function getPicksByDate(date) {
+  return await query(
+    `SELECT * FROM picks WHERE scan_date = ? ORDER BY confidence DESC`,
+    [date]
+  );
+}
+
+// Get dates with picks
+export async function getDatesWithPicks() {
+  return await query(
+    `SELECT DISTINCT scan_date FROM picks ORDER BY scan_date DESC`
+  );
+}
+
+// Get pick stats
 export async function getPickStats() {
-  if (IS_VERCEL) {
-    const result = await sql.query(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN result = 'won' THEN 1 ELSE 0 END) as won,
-        SUM(CASE WHEN result = 'lost' THEN 1 ELSE 0 END) as lost,
-        SUM(CASE WHEN result = 'push' THEN 1 ELSE 0 END) as push,
-        SUM(CASE WHEN result = 'pending' THEN 1 ELSE 0 END) as pending
-      FROM picks
-    `);
-    return result.rows[0];
-  } else {
-    return db.prepare(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN result = 'won' THEN 1 ELSE 0 END) as won,
-        SUM(CASE WHEN result = 'lost' THEN 1 ELSE 0 END) as lost,
-        SUM(CASE WHEN result = 'push' THEN 1 ELSE 0 END) as push,
-        SUM(CASE WHEN result = 'pending' THEN 1 ELSE 0 END) as pending
-      FROM picks
-    `).get();
-  }
+  const result = await queryOne(`
+    SELECT 
+      COUNT(*) as total,
+      SUM(CASE WHEN result = 'won' THEN 1 ELSE 0 END) as won,
+      SUM(CASE WHEN result = 'lost' THEN 1 ELSE 0 END) as lost,
+      SUM(CASE WHEN result = 'push' THEN 1 ELSE 0 END) as push,
+      SUM(CASE WHEN result = 'pending' THEN 1 ELSE 0 END) as pending
+    FROM picks
+  `);
+  
+  return {
+    overall: result
+  };
 }
 
 // Chat functions
-export function saveChatMessage(userMessage, aiResponse, context) {
+export async function saveChatMessage(userMessage, aiResponse, context) {
   if (IS_VERCEL) {
-    throw new Error('Chat not yet supported on Vercel');
+    await query(
+      `INSERT INTO chat_history (user_message, ai_response, context) VALUES (?, ?, ?)`,
+      [userMessage, aiResponse, JSON.stringify(context)]
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO chat_history (user_message, ai_response, context)
+      VALUES (?, ?, ?)
+    `).run(userMessage, aiResponse, JSON.stringify(context));
   }
-  
-  db.prepare(`
-    INSERT INTO chat_history (user_message, ai_response, context)
-    VALUES (?, ?, ?)
-  `).run(userMessage, aiResponse, JSON.stringify(context));
 }
 
-export function getChatHistory(limit = 50) {
-  if (IS_VERCEL) {
-    throw new Error('Chat not yet supported on Vercel');
-  }
-  
-  return db.prepare(`
-    SELECT * FROM chat_history 
-    ORDER BY created_at DESC 
-    LIMIT ?
-  `).all(limit);
+export async function getChatHistory(limit = 50) {
+  return await query(
+    `SELECT * FROM chat_history ORDER BY created_at DESC LIMIT ?`,
+    [limit]
+  );
 }
 
 // Scheduler logs
@@ -531,7 +452,7 @@ export function optimizeDatabase() {
 
 export function removeDuplicates() {
   if (IS_VERCEL) {
-    throw new Error('Use Postgres DISTINCT or manual cleanup');
+    throw new Error('Use manual cleanup for Postgres');
   }
   
   db.exec(`
@@ -545,50 +466,14 @@ export function removeDuplicates() {
   console.log('✅ Duplicates removed');
 }
 
-export function deletePick(pickId) {
+export async function deletePick(pickId) {
   if (IS_VERCEL) {
-    throw new Error('Use async version');
+    await query(`DELETE FROM picks WHERE id = ?`, [pickId]);
+    return true;
+  } else {
+    const result = db.prepare(`DELETE FROM picks WHERE id = ?`).run(pickId);
+    return result.changes > 0;
   }
-  
-  const result = db.prepare(`DELETE FROM picks WHERE id = ?`).run(pickId);
-  return result.changes > 0;
 }
 
-// Additional functions from original database.js...
-export function updateGameTime(pickId, gameTime, gameDate) {
-  if (IS_VERCEL) {
-    throw new Error('Use async version');
-  }
-  
-  db.prepare(`
-    UPDATE picks 
-    SET game_time = ?, game_date = ?, updated_at = CURRENT_TIMESTAMP 
-    WHERE id = ?
-  `).run(gameTime, gameDate, pickId);
-}
-
-export function getPicksByDate(date) {
-  if (IS_VERCEL) {
-    throw new Error('Use async version');
-  }
-  
-  return db.prepare(`
-    SELECT * FROM picks 
-    WHERE scan_date = ?
-    ORDER BY confidence DESC
-  `).all(date);
-}
-
-export function getDatesWithPicks() {
-  if (IS_VERCEL) {
-    throw new Error('Use async version');
-  }
-  
-  return db.prepare(`
-    SELECT DISTINCT scan_date 
-    FROM picks 
-    ORDER BY scan_date DESC
-  `).all();
-}
-
-export { db, IS_VERCEL };
+export { IS_VERCEL };
