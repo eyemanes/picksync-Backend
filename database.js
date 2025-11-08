@@ -14,7 +14,17 @@ if (IS_VERCEL) {
     connectionString: process.env.DATABASE_URL,
     ssl: {
       rejectUnauthorized: false
-    }
+    },
+    max: 20, // Max connections in pool
+    idleTimeoutMillis: 30000, // Close idle clients after 30s
+    connectionTimeoutMillis: 10000, // Wait max 10s for connection
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000
+  });
+  
+  // Handle pool errors
+  pool.on('error', (err) => {
+    console.error('❌ Postgres pool error:', err);
   });
 } else {
   console.log('🔗 Using SQLite (Local Development)');
@@ -25,33 +35,51 @@ if (IS_VERCEL) {
   db.pragma('temp_store = MEMORY');
 }
 
-// Helper to run queries
-async function query(sqlQuery, params = []) {
-  if (IS_VERCEL) {
-    // Convert ? to $1, $2, etc for Postgres
-    let paramIndex = 1;
-    const pgQuery = sqlQuery.replace(/\?/g, () => `$${paramIndex++}`);
-    const result = await pool.query(pgQuery, params);
-    return result.rows;
-  } else {
-    // SQLite
-    if (sqlQuery.toLowerCase().includes('select')) {
-      return db.prepare(sqlQuery).all(...params);
-    } else {
-      return db.prepare(sqlQuery).run(...params);
+// Helper to run queries WITH RETRY
+async function query(sqlQuery, params = [], retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      if (IS_VERCEL) {
+        let paramIndex = 1;
+        const pgQuery = sqlQuery.replace(/\?/g, () => `$${paramIndex++}`);
+        const result = await pool.query(pgQuery, params);
+        return result.rows;
+      } else {
+        if (sqlQuery.toLowerCase().includes('select')) {
+          return db.prepare(sqlQuery).all(...params);
+        } else {
+          return db.prepare(sqlQuery).run(...params);
+        }
+      }
+    } catch (error) {
+      if (attempt === retries || !error.message.includes('Connection') && !error.message.includes('timeout')) {
+        throw error;
+      }
+      console.warn(`⚠️  Query attempt ${attempt} failed, retrying... (${error.message})`);
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
     }
   }
 }
 
-// Helper to get a single row
-async function queryOne(sqlQuery, params = []) {
-  if (IS_VERCEL) {
-    let paramIndex = 1;
-    const pgQuery = sqlQuery.replace(/\?/g, () => `$${paramIndex++}`);
-    const result = await pool.query(pgQuery, params);
-    return result.rows[0];
-  } else {
-    return db.prepare(sqlQuery).get(...params);
+// Helper to get a single row WITH RETRY
+async function queryOne(sqlQuery, params = [], retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      if (IS_VERCEL) {
+        let paramIndex = 1;
+        const pgQuery = sqlQuery.replace(/\?/g, () => `$${paramIndex++}`);
+        const result = await pool.query(pgQuery, params);
+        return result.rows[0];
+      } else {
+        return db.prepare(sqlQuery).get(...params);
+      }
+    } catch (error) {
+      if (attempt === retries || !error.message.includes('Connection') && !error.message.includes('timeout')) {
+        throw error;
+      }
+      console.warn(`⚠️  Query attempt ${attempt} failed, retrying... (${error.message})`);
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+    }
   }
 }
 
@@ -240,7 +268,6 @@ export async function saveScan(scanData) {
   const scanDate = new Date().toISOString().split('T')[0];
   
   if (IS_VERCEL) {
-    // Check for existing current POTD
     const existingCurrent = await queryOne(`SELECT id, potd_date FROM scans WHERE is_current = true`);
     
     if (existingCurrent && existingCurrent.potd_date !== potdDate) {
@@ -263,7 +290,6 @@ export async function saveScan(scanData) {
       scanData.status
     ]);
   } else {
-    // SQLite version
     const existingCurrent = db.prepare(`SELECT id, potd_date FROM scans WHERE is_current = 1`).get();
     
     if (existingCurrent && existingCurrent.potd_date !== potdDate) {
@@ -290,48 +316,58 @@ export async function saveScan(scanData) {
   console.log(`✅ Scan ${scanData.id} saved as CURRENT for ${potdDate}`);
 }
 
-// Save picks for scan
+// Save picks for scan - BATCH INSERT for speed
 export async function savePicksForScan(scanId, picks) {
   const scanDate = new Date().toISOString().split('T')[0];
-  let savedCount = 0;
-  let duplicateCount = 0;
   
   console.log(`💾 Saving ${picks.length} picks to database...`);
-  console.log(`🔍 First pick sample:`, JSON.stringify(picks[0], null, 2));
   
-  for (const pick of picks) {
-    try {
-      console.log(`💾 Saving pick #${pick.rank}:`);
-      console.log(`   Author: ${pick.comment_author}`);
-      console.log(`   Record: ${pick.user_record}`);
-      console.log(`   Event: ${pick.event}`);
-      console.log(`   Comment: ${pick.comment_body ? pick.comment_body.substring(0, 50) + '...' : 'MISSING'}`);
-      
-      await query(`
-        INSERT INTO picks (
-          scan_id, scan_date, rank, confidence, sport, event, pick, odds, units,
-          comment_score, comment_author, comment_body, comment_url,
-          reasoning, risk_factors, ai_analysis, user_record, game_time, game_date
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [
-        scanId, scanDate, pick.rank, pick.confidence, pick.sport, pick.event,
-        pick.pick, pick.odds, pick.units, pick.comment_score, pick.comment_author,
-        pick.comment_body, pick.comment_url, pick.reasoning, pick.risk_factors,
-        pick.ai_analysis, pick.user_record, pick.game_time, pick.game_date
-      ]);
-      savedCount++;
-    } catch (error) {
-      if (error.message.includes('duplicate') || error.message.includes('UNIQUE')) {
-        duplicateCount++;
-      } else {
-        console.error(`❌ Error saving pick:`, error.message);
-        console.error(`❌ Pick data:`, pick);
-        throw error;
+  if (IS_VERCEL) {
+    // BATCH INSERT for Postgres - way faster than individual inserts
+    const values = picks.map(pick => 
+      `('${scanId}', '${scanDate}', ${pick.rank}, ${pick.confidence}, '${escapeSQL(pick.sport)}', '${escapeSQL(pick.event)}', '${escapeSQL(pick.pick)}', ${pick.odds ? `'${pick.odds}'` : 'NULL'}, ${pick.units}, ${pick.comment_score}, '${escapeSQL(pick.comment_author)}', '${escapeSQL(pick.comment_body)}', '${escapeSQL(pick.comment_url)}', '${escapeSQL(pick.reasoning)}', '${escapeSQL(pick.risk_factors)}', '${escapeSQL(pick.ai_analysis)}', ${pick.user_record ? `'${pick.user_record}'` : 'NULL'}, ${pick.game_time ? `'${pick.game_time}'` : 'NULL'}, ${pick.game_date ? `'${pick.game_date}'` : 'NULL'})`
+    ).join(',');
+    
+    const batchQuery = `
+      INSERT INTO picks (
+        scan_id, scan_date, rank, confidence, sport, event, pick, odds, units,
+        comment_score, comment_author, comment_body, comment_url,
+        reasoning, risk_factors, ai_analysis, user_record, game_time, game_date
+      ) VALUES ${values}
+    `;
+    
+    await pool.query(batchQuery);
+    console.log(`✅ Batch inserted ${picks.length} picks`);
+  } else {
+    // SQLite - use transaction
+    const insertStmt = db.prepare(`
+      INSERT INTO picks (
+        scan_id, scan_date, rank, confidence, sport, event, pick, odds, units,
+        comment_score, comment_author, comment_body, comment_url,
+        reasoning, risk_factors, ai_analysis, user_record, game_time, game_date
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    const insertMany = db.transaction((picks) => {
+      for (const pick of picks) {
+        insertStmt.run(
+          scanId, scanDate, pick.rank, pick.confidence, pick.sport, pick.event,
+          pick.pick, pick.odds, pick.units, pick.comment_score, pick.comment_author,
+          pick.comment_body, pick.comment_url, pick.reasoning, pick.risk_factors,
+          pick.ai_analysis, pick.user_record, pick.game_time, pick.game_date
+        );
       }
-    }
+    });
+    
+    insertMany(picks);
+    console.log(`✅ Saved ${picks.length} picks in transaction`);
   }
-  
-  console.log(`✅ Saved ${savedCount} picks (${duplicateCount} duplicates skipped)`);
+}
+
+// Helper to escape SQL strings
+function escapeSQL(str) {
+  if (!str) return '';
+  return str.replace(/'/g, "''");
 }
 
 // Update pick result
@@ -430,7 +466,7 @@ export async function getChatHistory(limit = 50) {
 
 // Scheduler logs
 export function logSchedulerEvent(eventType, scanId, success, message) {
-  if (IS_VERCEL) return; // Skip logs on Vercel
+  if (IS_VERCEL) return;
   
   db.prepare(`
     INSERT INTO scheduler_logs (event_type, scan_id, success, message)
