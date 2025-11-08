@@ -1,4 +1,6 @@
-import db from './database.js';
+import Database from 'better-sqlite3';
+
+const db = new Database('picksync.db');
 
 // Track last scanned comment for incremental updates
 const scanState = {
