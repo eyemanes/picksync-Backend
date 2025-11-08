@@ -296,25 +296,36 @@ export async function savePicksForScan(scanId, picks) {
   let savedCount = 0;
   let duplicateCount = 0;
   
+  console.log(`💾 Saving ${picks.length} picks to database...`);
+  console.log(`🔍 First pick sample:`, JSON.stringify(picks[0], null, 2));
+  
   for (const pick of picks) {
     try {
+      console.log(`💾 Saving pick #${pick.rank}:`);
+      console.log(`   Author: ${pick.comment_author}`);
+      console.log(`   Record: ${pick.user_record}`);
+      console.log(`   Event: ${pick.event}`);
+      console.log(`   Comment: ${pick.comment_body ? pick.comment_body.substring(0, 50) + '...' : 'MISSING'}`);
+      
       await query(`
         INSERT INTO picks (
           scan_id, scan_date, rank, confidence, sport, event, pick, odds, units,
           comment_score, comment_author, comment_body, comment_url,
-          reasoning, risk_factors, ai_analysis, user_record
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          reasoning, risk_factors, ai_analysis, user_record, game_time, game_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         scanId, scanDate, pick.rank, pick.confidence, pick.sport, pick.event,
         pick.pick, pick.odds, pick.units, pick.comment_score, pick.comment_author,
         pick.comment_body, pick.comment_url, pick.reasoning, pick.risk_factors,
-        pick.ai_analysis, pick.user_record
+        pick.ai_analysis, pick.user_record, pick.game_time, pick.game_date
       ]);
       savedCount++;
     } catch (error) {
       if (error.message.includes('duplicate') || error.message.includes('UNIQUE')) {
         duplicateCount++;
       } else {
+        console.error(`❌ Error saving pick:`, error.message);
+        console.error(`❌ Pick data:`, pick);
         throw error;
       }
     }
