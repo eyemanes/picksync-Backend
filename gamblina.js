@@ -159,29 +159,22 @@ YOUR EXPERTISE:
 ⚡ Recency bias & variance traps
 🔥 Historical matchup data & trends
 
-CONFIDENCE SCORING (BE STRICT & ANALYTICAL):
-90-100% LOCK 🔒
-- Elite capper (>70% win rate) + MULTIPLE edges align
-- Strong statistical backing + Clear value in odds
-- Line movement confirms sharp action
-- Example: "Proven 75% capper, team 8-2 ATS in this spot, line moved from -3 to -2 despite 65% public on opponent = sharp money confirms edge"
+CONFIDENCE SCORING (Extract ALL picks, rate honestly):
+85-100% LOCK 🔒
+- Elite capper (>70% win rate) + Multiple edges
+- Detailed stats + Clear value + Strong reasoning
 
-75-89% STRONG 💪
-- Good capper (60-70% win rate) + Clear edge
-- OR excellent analysis from unproven capper
-- Value in the number + Solid reasoning
-- Example: "65% capper with detailed matchup breakdown, team has rest advantage, key injury creates value"
+70-84% STRONG 💪  
+- Good capper (60-70% win rate) + Solid analysis
+- OR excellent breakdown from newer capper
 
-60-74% DECENT ✓
-- Average capper (52-58% win rate) + Reasonable analysis
-- OR new capper with very solid breakdown
-- Some edge exists but not overwhelming
-- Example: "Capper has positive ROI, identifies role player return from injury that public isn't pricing in"
+55-69% DECENT ✓
+- Average capper OR reasonable analysis
+- Solid logic even without elite record
 
-Below 60% = SKIP ❌
-- Don't waste time on weak picks with no edge
-- Gut feelings without data = PASS
-- Public plays with no contrarian angle = FADE
+40-54% LEAN 📊
+- Casual pick with basic reasoning
+- "I like X" with some explanation
 
 REASONING FORMAT (40-80 words - BE SPECIFIC WITH STATS):
 ✅ GOOD EXAMPLES:
@@ -219,22 +212,21 @@ JSON FORMAT:
   "riskLevel": "low/medium/high"
 }]
 
-INCLUDE:
-✅ Any pick with game + bet type (ML/spread/total/props)
-✅ Picks with track records (prioritize these!)
-✅ Picks with detailed statistical reasoning
-✅ Value plays with clear edges
+INCLUDE ALL PICKS THAT HAVE:
+✅ A specific game and bet type (ML/spread/total/props)
+✅ ANY reasoning or analysis (even if brief)
+✅ Track record OR logical explanation
+✅ "I like X" counts if they explain why
 
-EXCLUDE:
-❌ Pure questions/discussions
-❌ Jokes/memes
-❌ Vague "I like team X" with zero analysis
-❌ Emotional picks based on fandom
+Only EXCLUDE:
+❌ Pure jokes with no actual bet
+❌ Just questions with no pick
+❌ Completely off-topic spam
 
 REDDIT COMMENTS TO ANALYZE:
 ${JSON.stringify(formattedComments, null, 2)}
 
-Return ONLY valid JSON array with quality picks. Be SELECTIVE - quality over quantity:`;
+Return ONLY valid JSON array. Extract MOST legitimate picks - we want good volume with accurate confidence ratings:`;
 
   console.log(`📤 Sending batch ${batchNum} to Gamblina...`);
   console.log(`📏 Input tokens: ~${Math.ceil(prompt.length / 4)}`);
