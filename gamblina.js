@@ -5,18 +5,15 @@ import { getCache, setCache } from './cache.js';
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const GAMBLINA_MODEL = process.env.GAMBLINA_MODEL || 'x-ai/grok-4';
 const GAMBLINA_TEMPERATURE = parseFloat(process.env.GAMBLINA_TEMPERATURE) || 0.3;
-const GAMBLINA_MAX_TOKENS = 8000;
-const BATCH_SIZE = 45;
+const GAMBLINA_MAX_TOKENS = 4000; // REDUCED from 8000 to get faster responses
+const BATCH_SIZE = 25; // REDUCED from 45 to make smaller batches
 
 let gamblinaCallsThisMonth = 0;
 
 export async function analyzeWithGamblina(allComments) {
   console.log('\n💋 Starting Gamblina AI Analysis...');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`📊 Total Comments: ${allComments.length}`);
   console.log(`📊 With Records: ${allComments.filter(c => c.record).length}`);
-  console.log(`⚙️  Model: ${GAMBLINA_MODEL}`);
-  console.log(`⚙️  Max Tokens: ${GAMBLINA_MAX_TOKENS}`);
 
   if (allComments.length === 0) {
     return { analyzedPicks: [], totalAnalyzed: 0, tokensUsed: 0 };
@@ -26,8 +23,7 @@ export async function analyzeWithGamblina(allComments) {
   const numBatches = needsBatching ? Math.ceil(allComments.length / BATCH_SIZE) : 1;
   
   if (needsBatching) {
-    console.log(`📦 Large comment volume - splitting into ${numBatches} batches`);
-    console.log(`   Batch size: ${BATCH_SIZE} comments each`);
+    console.log(`📦 Splitting into ${numBatches} batches (${BATCH_SIZE} each)`);
   }
 
   let allPicks = [];
@@ -38,9 +34,7 @@ export async function analyzeWithGamblina(allComments) {
     const end = Math.min(start + BATCH_SIZE, allComments.length);
     const batchComments = allComments.slice(start, end);
     
-    if (needsBatching) {
-      console.log(`\n📦 Batch ${batchNum + 1}/${numBatches} (${batchComments.length} comments)...`);
-    }
+    console.log(`\n📦 Batch ${batchNum + 1}/${numBatches} (${batchComments.length} comments)...`);
 
     const commentHash = crypto
       .createHash('md5')
@@ -56,19 +50,26 @@ export async function analyzeWithGamblina(allComments) {
       continue;
     }
 
-    const result = await analyzeBatch(batchComments, batchNum + 1, numBatches);
-    allPicks.push(...result.picks);
-    totalTokens += result.tokensUsed;
-    
-    setCache(cacheKey, { picks: result.picks }, 3600);
+    try {
+      const result = await analyzeBatch(batchComments, batchNum + 1, numBatches);
+      allPicks.push(...result.picks);
+      totalTokens += result.tokensUsed;
+      
+      // Cache successful result
+      setCache(cacheKey, { picks: result.picks }, 3600);
+    } catch (error) {
+      console.error(`❌ Batch ${batchNum + 1} failed: ${error.message}`);
+      console.error(`   Continuing with remaining batches...`);
+      // DON'T throw - continue with other batches
+    }
     
     if (batchNum < numBatches - 1) {
-      console.log('⏳ Waiting 2s before next batch...');
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log('⏳ Waiting 1s before next batch...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
   
-  console.log('🔍 Enriching picks with comment data...');
+  console.log(`🔍 Enriching ${allPicks.length} picks with comment data...`);
   const enrichedPicks = allPicks.map((pick, index) => {
     const original = allComments.find(c => c.author === pick.poster);
     
@@ -110,7 +111,6 @@ export async function analyzeWithGamblina(allComments) {
   console.log(`   Total Picks: ${enrichedPicks.length}`);
   console.log(`   Batches: ${numBatches}`);
   console.log(`   Tokens: ${totalTokens}`);
-  console.log(`   API Calls This Month: ${gamblinaCallsThisMonth}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   
   return {
@@ -126,60 +126,35 @@ async function analyzeBatch(batchComments, batchNum, totalBatches) {
     id: index + 1,
     author: comment.author,
     record: comment.record || null,
-    winRate: comment.winRate ? comment.winRate.toFixed(1) : null,
     score: comment.score,
-    text: comment.text.substring(0, 800),
+    text: comment.text.substring(0, 500), // REDUCED from 800
   }));
 
-  const prompt = `You're GAMBLINA 💋 - A professional sports gambler and sharp bettor with 10+ years of experience in the industry. You've made a living reading lines, finding edges, and exploiting variance. You're ANALYTICAL, SHARP, and you smell BULLSHIT from a mile away.
+  const prompt = `Analyze ${batchComments.length} Reddit sports betting comments. Extract ALL picks with reasoning.
 
-ANALYZE ${batchComments.length} Reddit r/sportsbook POTD comments${totalBatches > 1 ? ` (Batch ${batchNum}/${totalBatches})` : ''} like a PROFESSIONAL handicapper would.
+CONFIDENCE LEVELS:
+85-100: Elite capper (>70% win rate) + strong analysis
+70-84: Good capper (60-70%) + solid reasoning  
+55-69: Average capper + decent logic
+40-54: Casual pick + basic reasoning
 
-CONFIDENCE SCORING (Extract ALL picks, rate honestly):
-85-100% LOCK 🔒 - Elite capper (>70% win rate) + Multiple edges
-70-84% STRONG 💪 - Good capper (60-70% win rate) + Solid analysis
-55-69% DECENT ✓ - Average capper OR reasonable analysis
-40-54% LEAN 📊 - Casual pick with basic reasoning
+INCLUDE: Any pick with a specific game/bet and reasoning
+EXCLUDE: Jokes, questions, spam
 
-JSON FORMAT:
-[{
-  "poster": "username",
-  "posterRecord": "45-15-2" or null,
-  "posterWinRate": "75.0" or null,
-  "sport": "NBA/NFL/NHL/Soccer/MLB/Tennis/etc",
-  "teams": "Team A vs Team B",
-  "gameTime": "7:30 PM EST" or null,
-  "gameDate": "2025-11-08",
-  "pick": "Lakers -2.5 (-110)",
-  "confidence": 85,
-  "reasoning": "40-80 words of SHARP analysis with stats and edges",
-  "keyFactors": ["edge 1", "edge 2"],
-  "riskLevel": "low/medium/high"
-}]
-
-INCLUDE ALL PICKS THAT HAVE:
-✅ A specific game and bet type (ML/spread/total/props)
-✅ ANY reasoning or analysis (even if brief)
-✅ Track record OR logical explanation
-
-Only EXCLUDE:
-❌ Pure jokes with no actual bet
-❌ Just questions with no pick
-❌ Completely off-topic spam
-
-REDDIT COMMENTS TO ANALYZE:
+COMMENTS:
 ${JSON.stringify(formattedComments, null, 2)}
 
-Return ONLY valid JSON array - no markdown, no text, just pure JSON:`;
+Return ONLY this JSON format (no markdown, no text):
+[{"poster":"user","posterRecord":"10-5","sport":"NBA","teams":"Lakers vs Warriors","pick":"Lakers -2.5","confidence":75,"reasoning":"short analysis","keyFactors":["factor1","factor2"],"riskLevel":"medium"}]`;
 
   console.log(`📤 Sending batch ${batchNum} to Gamblina...`);
-  console.log(`📏 Input tokens: ~${Math.ceil(prompt.length / 4)}`);
 
   const startTime = Date.now();
 
   try {
+    // FETCH with timeout
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90000);
+    const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
 
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       signal: controller.signal,
@@ -188,14 +163,14 @@ Return ONLY valid JSON array - no markdown, no text, just pure JSON:`;
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'https://picksync.app',
-        'X-Title': 'Picksync Analysis - Gamblina Pro',
+        'X-Title': 'Picksync Analysis',
       },
       body: JSON.stringify({
         model: GAMBLINA_MODEL,
         messages: [
           {
             role: 'system',
-            content: 'You are GAMBLINA, a professional sports bettor. Return ONLY a valid JSON array - no markdown code blocks, no text before or after. Just the pure JSON array starting with [ and ending with ]. EXTRACT ALL LEGITIMATE PICKS from the comments - include every pick that has actual reasoning, even casual ones. Rate each honestly with accurate confidence scores. We want volume and accuracy.'
+            content: 'You are a sports betting analyst. Return ONLY valid JSON array with no markdown, no text before or after. Extract ALL picks with reasoning from comments.'
           },
           { role: 'user', content: prompt }
         ],
@@ -215,56 +190,64 @@ Return ONLY valid JSON array - no markdown, no text, just pure JSON:`;
       throw new Error(`Gamblina API error: ${response.status}`);
     }
     
-    console.log('⏳ Parsing response...');
+    console.log('⏳ Reading response body...');
     
-    const responseText = await response.text();
-    console.log(`✅ Received ${responseText.length} bytes`);
+    // READ RESPONSE TEXT WITH TIMEOUT
+    const textPromise = response.text();
+    const textTimeout = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('response.text() timeout after 10s')), 10000)
+    );
     
+    const responseText = await Promise.race([textPromise, textTimeout]);
+    
+    console.log(`✅ Body read: ${responseText.length} bytes`);
+    
+    // PARSE API RESPONSE
     let data;
     try {
       data = JSON.parse(responseText);
-      console.log('✅ API response JSON parsed');
+      console.log('✅ API JSON parsed');
     } catch (jsonError) {
-      console.error('❌ Failed to parse API response as JSON:', jsonError.message);
-      console.error('📄 Response preview:', responseText.substring(0, 1000));
-      throw new Error('Invalid JSON from Gamblina API');
+      console.error('❌ Invalid API JSON:', jsonError.message);
+      console.error('📄 Response preview:', responseText.substring(0, 500));
+      throw new Error('Invalid JSON from API');
     }
     
     if (!data.choices?.[0]) {
-      console.error('❌ No choices in API response:', data);
+      console.error('❌ No choices in response');
       throw new Error('No response from Gamblina');
     }
 
     let content = data.choices[0].message.content;
     console.log('📄 Content length:', content.length);
-    console.log('📄 Content preview (first 200 chars):', content.substring(0, 200));
+    console.log('📄 First 150 chars:', content.substring(0, 150));
     
-    // Clean markdown AGGRESSIVELY
+    // CLEAN CONTENT
     content = content.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
     
-    // Remove any leading/trailing text outside of JSON
+    // EXTRACT JSON ARRAY
     const jsonStart = content.indexOf('[');
     const jsonEnd = content.lastIndexOf(']') + 1;
     
     if (jsonStart === -1 || jsonEnd === 0) {
-      console.error('❌ No JSON array found in content');
+      console.error('❌ No JSON array in content');
       console.error('📄 Full content:', content);
-      throw new Error('No JSON array in Grok response');
+      throw new Error('No JSON array found');
     }
     
     content = content.substring(jsonStart, jsonEnd);
-    console.log('✅ Extracted JSON array, length:', content.length);
+    console.log(`✅ Extracted JSON: ${content.length} chars`);
     
-    // Parse picks JSON
+    // PARSE PICKS
     let picks;
     try {
       const parsed = JSON.parse(content);
       picks = Array.isArray(parsed) ? parsed : (parsed.picks || []);
       console.log(`✅ Batch ${batchNum}: ${picks.length} picks extracted`);
     } catch (parseError) {
-      console.error('❌ Failed to parse picks JSON:', parseError.message);
-      console.error('📄 Content that failed to parse (first 1000 chars):', content.substring(0, 1000));
-      throw new Error(`Failed to parse Gamblina response: ${parseError.message}`);
+      console.error('❌ Failed to parse picks:', parseError.message);
+      console.error('📄 Content (first 500):', content.substring(0, 500));
+      throw new Error(`Parse error: ${parseError.message}`);
     }
     
     gamblinaCallsThisMonth++;
@@ -272,41 +255,27 @@ Return ONLY valid JSON array - no markdown, no text, just pure JSON:`;
     const tokensUsed = data.usage?.total_tokens || 0;
     
     if (data.usage) {
-      console.log(`📊 Batch ${batchNum} tokens: ${tokensUsed} (${data.usage.prompt_tokens} in + ${data.usage.completion_tokens} out)`);
+      console.log(`📊 Tokens: ${tokensUsed} (${data.usage.prompt_tokens} in + ${data.usage.completion_tokens} out)`);
     }
     
     return { picks, tokensUsed };
     
   } catch (error) {
     console.error(`❌ Batch ${batchNum} error:`, error.message);
-    console.error(`❌ Stack trace:`, error.stack);
+    if (error.name === 'AbortError') {
+      throw new Error('Request timeout - Grok took too long');
+    }
     throw error;
   }
 }
 
 export async function chatWithGamblina(userMessage, context) {
-  const systemPrompt = `You're GAMBLINA 💋, a professional sports bettor and sharp handicapper with 10+ years making a living from betting.
+  const systemPrompt = `You're GAMBLINA 💋, a professional sports bettor.
 
-Current Stats: ${context.stats?.won || 0}W-${context.stats?.lost || 0}L-${context.stats?.push || 0}P
-Record: ${context.stats?.total > 0 ? ((context.stats.won / context.stats.total) * 100).toFixed(1) : 0}% hit rate
-Today's Picks: ${context.recentPicks?.length || 0}
+Stats: ${context.stats?.won || 0}W-${context.stats?.lost || 0}L-${context.stats?.push || 0}P
+Hit rate: ${context.stats?.total > 0 ? ((context.stats.won / context.stats.total) * 100).toFixed(1) : 0}%
 
-YOUR PERSONALITY:
-- Sharp and analytical (you live by the numbers)
-- Confident but not cocky
-- Sassy when people ask dumb questions
-- You respect bankroll management
-- You hate public bettors who chase
-- You love finding contrarian value
-
-TALK LIKE A PRO:
-- Use betting terminology (RLM, steam, sharp action, public fade, overlay, etc.)
-- Reference actual concepts (line movement, injury reports, rest spots, lookaheads)
-- Keep it real - no false confidence
-- 2-4 sentences max
-- Add personality with emojis (💅💋🔥💰📊)
-
-You're the smartest person in the room. Act like it.`;
+Talk like a sharp bettor. 2-4 sentences. Use emojis 💅💋🔥💰`;
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -315,7 +284,7 @@ You're the smartest person in the room. Act like it.`;
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'https://picksync.app',
-        'X-Title': 'Picksync Chat - Gamblina',
+        'X-Title': 'Picksync Chat',
       },
       body: JSON.stringify({
         model: GAMBLINA_MODEL,
@@ -323,7 +292,7 @@ You're the smartest person in the room. Act like it.`;
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage }
         ],
-        max_tokens: 500,
+        max_tokens: 300,
         temperature: 0.8,
       }),
     });
@@ -333,7 +302,7 @@ You're the smartest person in the room. Act like it.`;
     
     return data.choices[0].message.content;
   } catch (error) {
-    console.error('❌ Error chatting with Gamblina:', error.message);
+    console.error('❌ Chat error:', error.message);
     throw error;
   }
 }

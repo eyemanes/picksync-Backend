@@ -5,16 +5,12 @@ import { saveScan, savePicksForScan, logSchedulerEvent } from './database.js';
 import { updateScanStatus, setScanError, resetScanStatus } from './scanState.js';
 import { clearCache, deleteCache, CACHE_KEYS } from './cache.js';
 
-// Check if running on Vercel
 const IS_VERCEL = process.env.VERCEL === '1';
-
-// Scheduler configuration from environment or defaults
-const SCAN_TIMES = process.env.SCAN_TIMES || '0 12,20 * * *'; // 12 PM, 8 PM daily
+const SCAN_TIMES = process.env.SCAN_TIMES || '0 12,20 * * *';
 
 let schedulerTask = null;
 let isRunning = false;
 
-// Run a complete scan cycle
 export async function runScan() {
   if (isRunning) {
     console.log('⏸️  Scan already in progress, skipping...');
@@ -26,26 +22,24 @@ export async function runScan() {
   const startTime = Date.now();
 
   console.log('\n🚀 AUTOMATED SCAN STARTED');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`📋 Scan ID: ${scanId}`);
   console.log(`⏰ Time: ${new Date().toLocaleString()}`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
   try {
-    // Reset status
     resetScanStatus();
     
-    // Step 1: Fetch POTD data from Reddit
     updateScanStatus('reddit', 20, 'Fetching POTD thread...');
     const potdData = await getPOTDData();
     updateScanStatus('reddit', 40, `Found ${potdData.totalComments} comments`);
 
-    // Step 2: Analyze ALL comments with Gamblina (filtering + ranking)
     updateScanStatus('analysis', 50, 'Analyzing picks with AI...');
     const { analyzedPicks, tokensUsed } = await analyzeWithGamblina(potdData.allComments);
     updateScanStatus('analysis', 80, `Extracted ${analyzedPicks.length} quality picks`);
 
-    // Step 3: Save to database
+    if (analyzedPicks.length === 0) {
+      throw new Error('No picks extracted from comments');
+    }
+
     updateScanStatus('database', 90, 'Saving picks...');
     const scanDuration = Date.now() - startTime;
     
@@ -61,8 +55,7 @@ export async function runScan() {
 
     await savePicksForScan(scanId, analyzedPicks);
 
-    // CRITICAL: Clear all caches after saving new picks
-    console.log('🗑️  Clearing all caches to force fresh data...');
+    console.log('🗑️  Clearing caches...');
     clearCache();
     deleteCache(CACHE_KEYS.TODAY_PICKS);
     deleteCache(CACHE_KEYS.PICK_STATS);
@@ -70,24 +63,16 @@ export async function runScan() {
     deleteCache('history_potds');
     deleteCache('my_bets');
     deleteCache('finished_picks');
-    console.log('✅ All caches cleared');
+    console.log('✅ Caches cleared');
 
-    // Log success
     logSchedulerEvent('scan', scanId, true, `Successfully analyzed ${analyzedPicks.length} picks in ${(scanDuration / 1000).toFixed(1)}s`);
     
-    // Mark complete
     updateScanStatus('complete', 100, `Saved ${analyzedPicks.length} picks successfully`);
 
-    console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('✅ AUTOMATED SCAN COMPLETED');
+    console.log('\n✅ AUTOMATED SCAN COMPLETED');
     console.log(`   Duration: ${(scanDuration / 1000).toFixed(1)}s`);
     console.log(`   Picks Saved: ${analyzedPicks.length}`);
-    console.log(`   Reddit Calls: ${potdData.apiCallsUsed || 2}`);
-    console.log(`   Gamblina Calls: 1`);
-    if (tokensUsed) {
-      console.log(`   Tokens Used: ${tokensUsed}`);
-    }
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    console.log(`   Tokens Used: ${tokensUsed}\n`);
 
     isRunning = false;
 
@@ -103,19 +88,16 @@ export async function runScan() {
   } catch (error) {
     const scanDuration = Date.now() - startTime;
     
-    console.error('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.error('❌ AUTOMATED SCAN FAILED');
+    console.error('\n❌ AUTOMATED SCAN FAILED');
     console.error(`   Error: ${error.message}`);
-    console.error(`   Duration: ${(scanDuration / 1000).toFixed(1)}s`);
-    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    console.error(`   Stack: ${error.stack}`);
+    console.error(`   Duration: ${(scanDuration / 1000).toFixed(1)}s\n`);
 
-    // Log failure
     logSchedulerEvent('scan', scanId, false, `Scan failed: ${error.message}`);
     
-    // Set error status
     setScanError(error);
 
-    isRunning = false;
+    isRunning = false; // ALWAYS reset flag
 
     return {
       success: false,
@@ -125,16 +107,10 @@ export async function runScan() {
   }
 }
 
-// Start the scheduler (disabled on Vercel)
 export function startScheduler() {
   if (IS_VERCEL) {
     console.log('\n⏰ SCHEDULER DISABLED ON VERCEL');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('ℹ️  Use one of these alternatives:');
-    console.log('   1. Vercel Cron Jobs (Pro plan)');
-    console.log('   2. External cron service (cron-job.org)');
-    console.log('   3. Manual scans only');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    console.log('ℹ️  Use Vercel Cron Jobs or external service\n');
     return;
   }
   
@@ -144,14 +120,8 @@ export function startScheduler() {
   }
 
   console.log('\n⏰ SCHEDULER INITIALIZED');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`📅 Schedule: ${SCAN_TIMES}`);
-  console.log('   (Cron format: minute hour day month weekday)');
-  console.log('   → 12:00 PM - Afternoon scan');
-  console.log('   → 8:00 PM - Evening scan');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  console.log(`📅 Schedule: ${SCAN_TIMES}\n`);
 
-  // Create scheduled task
   schedulerTask = cron.schedule(SCAN_TIMES, async () => {
     console.log('⏰ Scheduled scan triggered');
     await runScan();
@@ -162,7 +132,6 @@ export function startScheduler() {
   logSchedulerEvent('scheduler', null, true, 'Scheduler started');
 }
 
-// Stop the scheduler
 export function stopScheduler() {
   if (schedulerTask) {
     schedulerTask.stop();
@@ -172,7 +141,6 @@ export function stopScheduler() {
   }
 }
 
-// Get scheduler status
 export function getSchedulerStatus() {
   return {
     active: !!schedulerTask,
