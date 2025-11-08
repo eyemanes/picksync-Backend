@@ -532,4 +532,4 @@ export async function deletePick(pickId) {
   }
 }
 
-export { IS_VERCEL };
+export { IS_VERCEL, query, queryOne };
