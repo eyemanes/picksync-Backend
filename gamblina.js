@@ -5,13 +5,11 @@ import { getCache, setCache } from './cache.js';
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const GAMBLINA_MODEL = process.env.GAMBLINA_MODEL || 'x-ai/grok-4';
 const GAMBLINA_TEMPERATURE = parseFloat(process.env.GAMBLINA_TEMPERATURE) || 0.3;
-const GAMBLINA_MAX_TOKENS = 8000; // Increased for longer analysis
+const GAMBLINA_MAX_TOKENS = 8000;
 const BATCH_SIZE = 45;
 
-// Track Gamblina usage
 let gamblinaCallsThisMonth = 0;
 
-// Main function with intelligent batching
 export async function analyzeWithGamblina(allComments) {
   console.log('\n💋 Starting Gamblina AI Analysis...');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -24,7 +22,6 @@ export async function analyzeWithGamblina(allComments) {
     return { analyzedPicks: [], totalAnalyzed: 0, tokensUsed: 0 };
   }
 
-  // Determine if we need batching
   const needsBatching = allComments.length > BATCH_SIZE;
   const numBatches = needsBatching ? Math.ceil(allComments.length / BATCH_SIZE) : 1;
   
@@ -36,7 +33,6 @@ export async function analyzeWithGamblina(allComments) {
   let allPicks = [];
   let totalTokens = 0;
 
-  // Process in batches
   for (let batchNum = 0; batchNum < numBatches; batchNum++) {
     const start = batchNum * BATCH_SIZE;
     const end = Math.min(start + BATCH_SIZE, allComments.length);
@@ -46,7 +42,6 @@ export async function analyzeWithGamblina(allComments) {
       console.log(`\n📦 Batch ${batchNum + 1}/${numBatches} (${batchComments.length} comments)...`);
     }
 
-    // Create cache key from batch content
     const commentHash = crypto
       .createHash('md5')
       .update(JSON.stringify(batchComments.map(c => ({ author: c.author, text: c.text }))))
@@ -54,7 +49,6 @@ export async function analyzeWithGamblina(allComments) {
     
     const cacheKey = `gamblina:batch:${commentHash}`;
     
-    // Check cache first
     const cached = getCache(cacheKey);
     if (cached) {
       console.log(`✨ Using cached analysis for batch ${batchNum + 1}`);
@@ -62,27 +56,22 @@ export async function analyzeWithGamblina(allComments) {
       continue;
     }
 
-    // Analyze this batch
     const result = await analyzeBatch(batchComments, batchNum + 1, numBatches);
     allPicks.push(...result.picks);
     totalTokens += result.tokensUsed;
     
-    // Cache this batch
     setCache(cacheKey, { picks: result.picks }, 3600);
     
-    // Rate limit between batches
     if (batchNum < numBatches - 1) {
       console.log('⏳ Waiting 2s before next batch...');
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
   
-  // Enrich with original comment data and map to database fields
   console.log('🔍 Enriching picks with comment data...');
   const enrichedPicks = allPicks.map((pick, index) => {
     const original = allComments.find(c => c.author === pick.poster);
     
-    // Map Grok's response to database schema
     return {
       rank: index + 1,
       confidence: pick.confidence || 50,
@@ -93,7 +82,7 @@ export async function analyzeWithGamblina(allComments) {
       units: pick.units || 1.0,
       comment_score: original?.score || 0,
       comment_author: pick.poster || 'unknown',
-      comment_body: original?.text || '', // Full original Reddit comment
+      comment_body: original?.text || '',
       comment_url: `https://reddit.com/r/sportsbook/comments/${original?.commentId || ''}`,
       reasoning: (pick.reasoning || '') + (pick.keyFactors ? ' | ' + pick.keyFactors.join(', ') : ''),
       risk_factors: pick.riskLevel || 'medium',
@@ -109,13 +98,11 @@ export async function analyzeWithGamblina(allComments) {
     };
   });
   
-  // Helper to extract odds from pick text
   function extractOdds(pickText) {
     const oddsMatch = pickText?.match(/([+-]\d+)|\((\d+\.\d+)\)/);
     return oddsMatch ? oddsMatch[0] : null;
   }
   
-  // Sort by confidence
   enrichedPicks.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
   
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -134,67 +121,25 @@ export async function analyzeWithGamblina(allComments) {
   };
 }
 
-// Analyze a single batch
 async function analyzeBatch(batchComments, batchNum, totalBatches) {
-  // Format comments concisely
   const formattedComments = batchComments.map((comment, index) => ({
     id: index + 1,
     author: comment.author,
     record: comment.record || null,
     winRate: comment.winRate ? comment.winRate.toFixed(1) : null,
     score: comment.score,
-    text: comment.text.substring(0, 800), // More context
+    text: comment.text.substring(0, 800),
   }));
 
   const prompt = `You're GAMBLINA 💋 - A professional sports gambler and sharp bettor with 10+ years of experience in the industry. You've made a living reading lines, finding edges, and exploiting variance. You're ANALYTICAL, SHARP, and you smell BULLSHIT from a mile away.
 
 ANALYZE ${batchComments.length} Reddit r/sportsbook POTD comments${totalBatches > 1 ? ` (Batch ${batchNum}/${totalBatches})` : ''} like a PROFESSIONAL handicapper would.
 
-YOUR EXPERTISE:
-🎯 Line movement & reverse line movement
-📊 Statistical edges & sample size awareness
-💰 Value hunting & implied probability
-🚩 Red flags (injuries, rest, situational spots)
-📈 Sharp vs public money identification
-⚡ Recency bias & variance traps
-🔥 Historical matchup data & trends
-
 CONFIDENCE SCORING (Extract ALL picks, rate honestly):
-85-100% LOCK 🔒
-- Elite capper (>70% win rate) + Multiple edges
-- Detailed stats + Clear value + Strong reasoning
-
-70-84% STRONG 💪  
-- Good capper (60-70% win rate) + Solid analysis
-- OR excellent breakdown from newer capper
-
-55-69% DECENT ✓
-- Average capper OR reasonable analysis
-- Solid logic even without elite record
-
-40-54% LEAN 📊
-- Casual pick with basic reasoning
-- "I like X" with some explanation
-
-REASONING FORMAT (40-80 words - BE SPECIFIC WITH STATS):
-✅ GOOD EXAMPLES:
-"Lakers 7-2 ATS as road dogs this season. LeBron averages 31/9/8 in back-to-backs against Western Conference. Line opened -4.5, now -2.5 with 67% tickets on Warriors - classic RLM. Warriors missing Curry (32 PPG) and Wiggins, playing 4th game in 5 nights. Sharp money hammering Lakers plus the points."
-
-"Capper has 72% win rate over 150+ picks. Identifies defensive matchup edge - opposing team ranks 28th against the run (145 YPG), this RB averages 5.2 YPC in similar spots. Weather forecast shows 15mph winds favoring ground game. Under is 9-2 in this stadium when winds exceed 12mph."
-
-❌ BAD EXAMPLES:
-"I like the Lakers tonight" 
-"Good value here, they're hot"
-"Feeling good about this one"
-"Lakers are the better team"
-
-ANALYZE EACH PICK FOR:
-1. Capper's record (MOST IMPORTANT for confidence)
-2. Quality of analysis (stats? matchups? injuries?)
-3. Value in the odds (is there actual overlay?)
-4. Red flags (public side? lookahead spot? tired legs?)
-5. Line movement (steam? reverse line movement?)
-6. Situational edges (revenge? rest? schedule?)
+85-100% LOCK 🔒 - Elite capper (>70% win rate) + Multiple edges
+70-84% STRONG 💪 - Good capper (60-70% win rate) + Solid analysis
+55-69% DECENT ✓ - Average capper OR reasonable analysis
+40-54% LEAN 📊 - Casual pick with basic reasoning
 
 JSON FORMAT:
 [{
@@ -208,7 +153,7 @@ JSON FORMAT:
   "pick": "Lakers -2.5 (-110)",
   "confidence": 85,
   "reasoning": "40-80 words of SHARP analysis with stats and edges",
-  "keyFactors": ["Specific edge 1 (6-10 words)", "Specific edge 2 (6-10 words)"],
+  "keyFactors": ["edge 1", "edge 2"],
   "riskLevel": "low/medium/high"
 }]
 
@@ -216,7 +161,6 @@ INCLUDE ALL PICKS THAT HAVE:
 ✅ A specific game and bet type (ML/spread/total/props)
 ✅ ANY reasoning or analysis (even if brief)
 ✅ Track record OR logical explanation
-✅ "I like X" counts if they explain why
 
 Only EXCLUDE:
 ❌ Pure jokes with no actual bet
@@ -226,7 +170,7 @@ Only EXCLUDE:
 REDDIT COMMENTS TO ANALYZE:
 ${JSON.stringify(formattedComments, null, 2)}
 
-Return ONLY valid JSON array. Extract ALL legitimate picks - we want good volume with accurate confidence ratings:`;
+Return ONLY valid JSON array - no markdown, no text, just pure JSON:`;
 
   console.log(`📤 Sending batch ${batchNum} to Gamblina...`);
   console.log(`📏 Input tokens: ~${Math.ceil(prompt.length / 4)}`);
@@ -235,7 +179,7 @@ Return ONLY valid JSON array. Extract ALL legitimate picks - we want good volume
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout for longer analysis
+    const timeout = setTimeout(() => controller.abort(), 90000);
 
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       signal: controller.signal,
@@ -251,7 +195,7 @@ Return ONLY valid JSON array. Extract ALL legitimate picks - we want good volume
         messages: [
           {
             role: 'system',
-            content: 'You are GAMBLINA, a professional sports bettor and sharp handicapper. You analyze picks like a Vegas pro - finding edges, identifying value, and cutting through the noise. Return ONLY valid JSON array with NO text before or after. Your reasoning should be analytical, specific, and backed by stats. EXTRACT ALL LEGITIMATE PICKS from the comments - include every pick that has actual reasoning, even casual ones. Rate each honestly with accurate confidence scores. We want volume and accuracy.'
+            content: 'You are GAMBLINA, a professional sports bettor. Return ONLY a valid JSON array - no markdown code blocks, no text before or after. Just the pure JSON array starting with [ and ending with ]. EXTRACT ALL LEGITIMATE PICKS from the comments - include every pick that has actual reasoning, even casual ones. Rate each honestly with accurate confidence scores. We want volume and accuracy.'
           },
           { role: 'user', content: prompt }
         ],
@@ -279,20 +223,37 @@ Return ONLY valid JSON array. Extract ALL legitimate picks - we want good volume
     let data;
     try {
       data = JSON.parse(responseText);
-      console.log('✅ API response parsed');
+      console.log('✅ API response JSON parsed');
     } catch (jsonError) {
-      console.error('❌ Invalid API response:', jsonError.message);
+      console.error('❌ Failed to parse API response as JSON:', jsonError.message);
+      console.error('📄 Response preview:', responseText.substring(0, 1000));
       throw new Error('Invalid JSON from Gamblina API');
     }
     
     if (!data.choices?.[0]) {
+      console.error('❌ No choices in API response:', data);
       throw new Error('No response from Gamblina');
     }
 
     let content = data.choices[0].message.content;
+    console.log('📄 Content length:', content.length);
+    console.log('📄 Content preview (first 200 chars):', content.substring(0, 200));
     
-    // Clean markdown
-    content = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    // Clean markdown AGGRESSIVELY
+    content = content.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
+    
+    // Remove any leading/trailing text outside of JSON
+    const jsonStart = content.indexOf('[');
+    const jsonEnd = content.lastIndexOf(']') + 1;
+    
+    if (jsonStart === -1 || jsonEnd === 0) {
+      console.error('❌ No JSON array found in content');
+      console.error('📄 Full content:', content);
+      throw new Error('No JSON array in Grok response');
+    }
+    
+    content = content.substring(jsonStart, jsonEnd);
+    console.log('✅ Extracted JSON array, length:', content.length);
     
     // Parse picks JSON
     let picks;
@@ -301,9 +262,9 @@ Return ONLY valid JSON array. Extract ALL legitimate picks - we want good volume
       picks = Array.isArray(parsed) ? parsed : (parsed.picks || []);
       console.log(`✅ Batch ${batchNum}: ${picks.length} picks extracted`);
     } catch (parseError) {
-      console.error('❌ Failed to parse picks:', parseError.message);
-      console.error('📄 Content preview:', content.substring(0, 500));
-      throw new Error('Failed to parse Gamblina response');
+      console.error('❌ Failed to parse picks JSON:', parseError.message);
+      console.error('📄 Content that failed to parse (first 1000 chars):', content.substring(0, 1000));
+      throw new Error(`Failed to parse Gamblina response: ${parseError.message}`);
     }
     
     gamblinaCallsThisMonth++;
@@ -318,11 +279,11 @@ Return ONLY valid JSON array. Extract ALL legitimate picks - we want good volume
     
   } catch (error) {
     console.error(`❌ Batch ${batchNum} error:`, error.message);
+    console.error(`❌ Stack trace:`, error.stack);
     throw error;
   }
 }
 
-// Chat with Gamblina
 export async function chatWithGamblina(userMessage, context) {
   const systemPrompt = `You're GAMBLINA 💋, a professional sports bettor and sharp handicapper with 10+ years making a living from betting.
 
@@ -344,18 +305,6 @@ TALK LIKE A PRO:
 - Keep it real - no false confidence
 - 2-4 sentences max
 - Add personality with emojis (💅💋🔥💰📊)
-
-GOOD RESPONSES:
-"That line moved from -3 to -5 with only 40% of tickets on the favorite? That's STEAM, babe 💰 Sharp money is all over that side. I'd wait to see if it pushes to -5.5 for even more value."
-
-"You're chasing a 5-game parlay? Girl, that's a 3% hit rate 💅 Break that into straights or 2-teamers. Parlays are for suckers unless you're hedging or correlating plays."
-
-"Love this contrarian spot 🔥 76% of the public on the over but the line dropped half a point? Books WANT you on that over. Gimme the under all day."
-
-BAD RESPONSES:
-"I think the Lakers will win!"
-"Good luck with your bet!"
-"That's a great pick!"
 
 You're the smartest person in the room. Act like it.`;
 
@@ -389,7 +338,6 @@ You're the smartest person in the room. Act like it.`;
   }
 }
 
-// Get Gamblina usage stats
 export function getGamblinaUsageStats() {
   return {
     callsThisMonth: gamblinaCallsThisMonth,
