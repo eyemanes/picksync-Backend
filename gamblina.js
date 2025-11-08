@@ -77,17 +77,43 @@ export async function analyzeWithGamblina(allComments) {
     }
   }
   
-  // Enrich with original comment data
+  // Enrich with original comment data and map to database fields
   console.log('🔍 Enriching picks with comment data...');
   const enrichedPicks = allPicks.map((pick, index) => {
     const original = allComments.find(c => c.author === pick.poster);
+    
+    // Map Grok's response to database schema
     return {
-      ...pick,
       rank: index + 1,
-      originalComment: original?.text || '',
-      commentScore: original?.score || 0,
+      confidence: pick.confidence || 50,
+      sport: pick.sport || 'Unknown',
+      event: pick.teams || pick.event || 'Unknown',
+      pick: pick.pick || '',
+      odds: extractOdds(pick.pick) || null,
+      units: pick.units || 1.0,
+      comment_score: original?.score || 0,
+      comment_author: pick.poster || 'unknown',
+      comment_body: original?.text || '', // Full original Reddit comment
+      comment_url: `https://reddit.com/r/sportsbook/comments/${original?.commentId || ''}`,
+      reasoning: (pick.reasoning || '') + (pick.keyFactors ? ' | ' + pick.keyFactors.join(', ') : ''),
+      risk_factors: pick.riskLevel || 'medium',
+      ai_analysis: JSON.stringify({
+        confidence: pick.confidence,
+        reasoning: pick.reasoning,
+        keyFactors: pick.keyFactors,
+        riskLevel: pick.riskLevel
+      }),
+      user_record: pick.posterRecord || original?.record || null,
+      game_time: pick.gameTime || null,
+      game_date: pick.gameDate || null,
     };
   });
+  
+  // Helper to extract odds from pick text
+  function extractOdds(pickText) {
+    const oddsMatch = pickText?.match(/([+-]\d+)|\((\d+\.\d+)\)/);
+    return oddsMatch ? oddsMatch[0] : null;
+  }
   
   // Sort by confidence
   enrichedPicks.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));

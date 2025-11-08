@@ -29,6 +29,7 @@ async function rateLimitedFetch(url, options) {
 export async function fetchRedditPosts() {
   try {
     console.log('📡 Fetching posts from r/sportsbook (hot, past day)...');
+    console.log('🔑 Using RapidAPI Key:', RAPIDAPI_KEY ? `${RAPIDAPI_KEY.substring(0, 10)}...` : 'MISSING');
     
     const response = await rateLimitedFetch(
       `https://${RAPIDAPI_HOST}/getPostsBySubreddit?subreddit=sportsbook&sort=hot&time=day`,
@@ -40,7 +41,20 @@ export async function fetchRedditPosts() {
       }
     );
 
+    console.log('📊 Response status:', response.status);
+    console.log('📊 Response ok:', response.ok);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Reddit API Error Response:', errorText);
+      throw new Error(`Reddit API error: ${response.status} - ${errorText}`);
+    }
+
     const data = await response.json();
+    console.log('📊 Response data keys:', Object.keys(data));
+    console.log('📊 data.success:', data.success);
+    console.log('📊 data.data exists:', !!data.data);
+    
     const posts = data.data?.posts || [];
     console.log(`📊 Fetched ${posts.length} posts`);
     
@@ -51,6 +65,7 @@ export async function fetchRedditPosts() {
     return posts;
   } catch (error) {
     console.error('❌ Error fetching Reddit posts:', error.message);
+    console.error('❌ Error stack:', error.stack);
     throw error;
   }
 }
