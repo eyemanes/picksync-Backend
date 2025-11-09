@@ -253,13 +253,22 @@ export async function getCurrentPOTDPicks() {
 
 // Get HISTORY POTDs
 export async function getHistoryPOTDs() {
-  return await query(`
-    SELECT DISTINCT s.id, s.potd_title, s.potd_date, s.scan_date, s.total_picks, s.created_at
+  console.log('📚 Fetching history POTDs (is_current = false)...');
+  
+  const result = await query(`
+    SELECT DISTINCT s.id, s.potd_title, s.potd_date, s.scan_date, s.total_picks, s.created_at,
+           (SELECT COUNT(*) FROM picks p WHERE p.scan_id = s.id) as actual_picks
     FROM scans s
-    WHERE s.is_current = ?
+    WHERE s.is_current = false
     ORDER BY s.created_at DESC
     LIMIT 50
-  `, [false]);
+  `);
+  
+  console.log(`📚 Found ${result ? result.length : 0} history POTDs`);
+  console.log('📚 Result type:', typeof result, 'Is Array:', Array.isArray(result));
+  
+  // Ensure we always return an array
+  return Array.isArray(result) ? result : [];
 }
 
 // Save scan

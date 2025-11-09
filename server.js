@@ -567,16 +567,32 @@ app.get('/api/usage', verifyToken, (req, res) => {
 // === BET TRACKING ENDPOINTS ===
 
 // Update user action (HIT/TRACK/FADE/NONE)
-app.post('/api/picks/:pickId/action', verifyToken, (req, res) => {
+app.post('/api/picks/:pickId/action', verifyToken, async (req, res) => {
   try {
     const { action } = req.body; // 'hit', 'track', 'fade', 'none'
-    updateUserAction(req.params.pickId, action);
+    const pickId = parseInt(req.params.pickId);
+    
+    console.log(`🎯 Updating pick ${pickId} to action: ${action}`);
+    
+    await updateUserAction(pickId, action);
+    
+    // Verify it saved
+    const { query } = await import('./database.js');
+    const verify = await query(`SELECT user_action FROM picks WHERE id = ?`, [pickId]);
+    
+    if (verify && verify.length > 0) {
+      console.log(`✅ Pick ${pickId} action saved: ${verify[0].user_action}`);
+    }
     
     deleteCache(CACHE_KEYS.TODAY_PICKS);
     deleteCache('my_bets');
     
-    res.json({ success: true });
+    res.json({ 
+      success: true,
+      updatedAction: verify && verify.length > 0 ? verify[0].user_action : action
+    });
   } catch (error) {
+    console.error('❌ Error updating action:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
