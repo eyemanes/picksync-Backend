@@ -316,7 +316,7 @@ app.post('/api/scan/process-batch', verifyToken, requireAdmin, async (req, res) 
 });
 
 // Get all scans (archives) with caching
-app.get('/api/archives', verifyToken, (req, res) => {
+app.get('/api/archives', verifyToken, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
@@ -328,34 +328,34 @@ app.get('/api/archives', verifyToken, (req, res) => {
       return res.json({ success: true, scans: cached, cached: true });
     }
     
-    const scans = getAllScans(limit, offset);
+    const scans = await getAllScans(limit, offset);
     setCache(cacheKey, scans, CACHE_TTL.RECENT_SCANS);
     
-    res.json({ success: true, scans, cached: false });
+    res.json({ success: true, scans: Array.isArray(scans) ? scans : [], cached: false });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // Get HISTORY POTDs (old POTDs only)
-app.get('/api/archives/potds', verifyToken, (req, res) => {
+app.get('/api/archives/potds', verifyToken, async (req, res) => {
   try {
     const cached = getCache('history_potds');
     if (cached) {
       return res.json({ success: true, potds: cached, cached: true });
     }
     
-    const potds = getHistoryPOTDs();
+    const potds = await getHistoryPOTDs();
     setCache('history_potds', potds, 1800);
     
-    res.json({ success: true, potds, cached: false });
+    res.json({ success: true, potds: Array.isArray(potds) ? potds : [], cached: false });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // Get picks for specific scan
-app.get('/api/archives/:scanId', verifyToken, (req, res) => {
+app.get('/api/archives/:scanId', verifyToken, async (req, res) => {
   try {
     const cacheKey = `scan:${req.params.scanId}`;
     const cached = getCache(cacheKey);
@@ -364,17 +364,17 @@ app.get('/api/archives/:scanId', verifyToken, (req, res) => {
       return res.json({ success: true, picks: cached, cached: true });
     }
     
-    const picks = getPicksByScanId(req.params.scanId);
+    const picks = await getPicksByScanId(req.params.scanId);
     setCache(cacheKey, picks, 3600);
     
-    res.json({ success: true, picks, cached: false });
+    res.json({ success: true, picks: Array.isArray(picks) ? picks : [], cached: false });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // Get finished picks (won/lost/push - not pending)
-app.get('/api/picks/finished', verifyToken, (req, res) => {
+app.get('/api/picks/finished', verifyToken, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const cached = getCache('finished_picks');
@@ -383,10 +383,10 @@ app.get('/api/picks/finished', verifyToken, (req, res) => {
       return res.json({ success: true, picks: cached, cached: true });
     }
     
-    const picks = getFinishedPicks(limit);
+    const picks = await getFinishedPicks(limit);
     setCache('finished_picks', picks, 300);
     
-    res.json({ success: true, picks, cached: false });
+    res.json({ success: true, picks: Array.isArray(picks) ? picks : [], cached: false });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -598,7 +598,7 @@ app.post('/api/picks/:pickId/action', verifyToken, async (req, res) => {
 });
 
 // Get my bets (HIT + TRACK only)
-app.get('/api/my-bets', verifyToken, (req, res) => {
+app.get('/api/my-bets', verifyToken, async (req, res) => {
   try {
     const cached = getCache('my_bets');
     
@@ -606,10 +606,10 @@ app.get('/api/my-bets', verifyToken, (req, res) => {
       return res.json({ success: true, picks: cached, cached: true });
     }
     
-    const picks = getMyBets();
+    const picks = await getMyBets();
     setCache('my_bets', picks, 300);
     
-    res.json({ success: true, picks, cached: false });
+    res.json({ success: true, picks: Array.isArray(picks) ? picks : [], cached: false });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -618,17 +618,17 @@ app.get('/api/my-bets', verifyToken, (req, res) => {
 // === HISTORY ENDPOINTS ===
 
 // Get available dates with picks
-app.get('/api/history/dates', verifyToken, (req, res) => {
+app.get('/api/history/dates', verifyToken, async (req, res) => {
   try {
-    const dates = getDatesWithPicks();
-    res.json({ success: true, dates });
+    const dates = await getDatesWithPicks();
+    res.json({ success: true, dates: Array.isArray(dates) ? dates : [] });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // Get picks for a specific date
-app.get('/api/history/date/:date', verifyToken, (req, res) => {
+app.get('/api/history/date/:date', verifyToken, async (req, res) => {
   try {
     const cacheKey = `history_date:${req.params.date}`;
     const cached = getCache(cacheKey);
@@ -637,10 +637,10 @@ app.get('/api/history/date/:date', verifyToken, (req, res) => {
       return res.json({ success: true, picks: cached, cached: true });
     }
     
-    const picks = getPicksByDate(req.params.date);
+    const picks = await getPicksByDate(req.params.date);
     setCache(cacheKey, picks, 3600);
     
-    res.json({ success: true, picks, cached: false });
+    res.json({ success: true, picks: Array.isArray(picks) ? picks : [], cached: false });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
