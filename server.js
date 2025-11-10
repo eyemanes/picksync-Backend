@@ -438,7 +438,7 @@ app.post('/api/chat', verifyToken, async (req, res) => {
 });
 
 // Get chat history
-app.get('/api/chat/history', verifyToken, (req, res) => {
+app.get('/api/chat/history', verifyToken, async (req, res) => {
   try {
     const cached = getCache(CACHE_KEYS.CHAT_HISTORY);
     
@@ -446,17 +446,17 @@ app.get('/api/chat/history', verifyToken, (req, res) => {
       return res.json({ success: true, history: cached, cached: true });
     }
     
-    const history = getChatHistory(50);
+    const history = await getChatHistory(50);
     setCache(CACHE_KEYS.CHAT_HISTORY, history, CACHE_TTL.CHAT_HISTORY);
     
-    res.json({ success: true, history, cached: false });
+    res.json({ success: true, history: Array.isArray(history) ? history : [], cached: false });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // Get stats
-app.get('/api/stats', verifyToken, (req, res) => {
+app.get('/api/stats', verifyToken, async (req, res) => {
   try {
     const cached = getCache(CACHE_KEYS.PICK_STATS);
     
@@ -464,7 +464,7 @@ app.get('/api/stats', verifyToken, (req, res) => {
       return res.json({ success: true, stats: cached, cached: true });
     }
     
-    const stats = getPickStats();
+    const stats = await getPickStats();
     setCache(CACHE_KEYS.PICK_STATS, stats, CACHE_TTL.PICK_STATS);
     
     res.json({ success: true, stats, cached: false });
@@ -501,10 +501,10 @@ app.get('/api/scheduler/status', verifyToken, (req, res) => {
   }
 });
 
-app.get('/api/scheduler/logs', verifyToken, (req, res) => {
+app.get('/api/scheduler/logs', verifyToken, async (req, res) => {
   try {
-    const logs = getSchedulerLogs(50);
-    res.json({ success: true, logs });
+    const logs = await getSchedulerLogs(50);
+    res.json({ success: true, logs: Array.isArray(logs) ? logs : [] });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
