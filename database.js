@@ -251,39 +251,68 @@ export async function getCurrentPOTDPicks() {
   };
 }
 
-// Get HISTORY POTDs
+// Get HISTORY POTDs - GROUP BY potd_date to combine all scans from same day
 export async function getHistoryPOTDs() {
-  console.log('📚 Fetching history POTDs (is_current = false)...');
+  console.log('📚 Fetching history POTDs (grouped by potd_date)...');
   
   const result = await query(`
-    SELECT DISTINCT s.id, s.potd_title, s.potd_date, s.scan_date, s.total_picks, s.created_at,
-           (SELECT COUNT(*) FROM picks p WHERE p.scan_id = s.id) as actual_picks
+    SELECT 
+      s.potd_date,
+      MAX(s.potd_title) as potd_title,
+      MAX(s.scan_date) as scan_date,
+      MAX(s.created_at) as created_at,
+      (SELECT COUNT(*) FROM picks p 
+       INNER JOIN scans s2 ON p.scan_id = s2.id 
+       WHERE s2.potd_date = s.potd_date AND s2.is_current = false) as total_picks
     FROM scans s
     WHERE s.is_current = false
-    ORDER BY s.created_at DESC
+    GROUP BY s.potd_date
+    ORDER BY MAX(s.created_at) DESC
     LIMIT 50
   `);
   
-  console.log(`📚 Found ${result ? result.length : 0} history POTDs`);
-  console.log('📚 Result type:', typeof result, 'Is Array:', Array.isArray(result));
+  console.log(`📚 Found ${result ? result.length : 0} unique POTD dates with combined picks`);
   
   // Ensure we always return an array
   return Array.isArray(result) ? result : [];
 }
 
-// Save scan
+// Save scan - DELETE OLD SCANS FROM SAME DATE FIRST (Fresh start!)
 export async function saveScan(scanData) {
   const potdDate = extractPOTDDate(scanData.potdTitle);
   const scanDate = new Date().toISOString().split('T')[0];
   
+  console.log(`📅 Saving scan for POTD date: ${potdDate}`);
+  
   if (IS_VERCEL) {
     const existingCurrent = await queryOne(`SELECT id, potd_date FROM scans WHERE is_current = true`);
     
+    // SAME DATE? DELETE OLD SCANS FIRST!
+    if (existingCurrent && existingCurrent.potd_date === potdDate) {
+      console.log(`🗑️  Same POTD date (${potdDate}) - DELETING old scans...`);
+      
+      const oldScans = await query(`SELECT id FROM scans WHERE potd_date = ? AND is_current = true`, [potdDate]);
+      
+      if (oldScans && oldScans.length > 0) {
+        // Delete picks first (foreign key)
+        for (const scan of oldScans) {
+          await query(`DELETE FROM picks WHERE scan_id = ?`, [scan.id]);
+          console.log(`   Deleted picks for scan ${scan.id}`);
+        }
+        
+        // Delete scans
+        await query(`DELETE FROM scans WHERE potd_date = ? AND is_current = true`, [potdDate]);
+        console.log(`   ✅ Deleted ${oldScans.length} old scan(s) from ${potdDate}`);
+      }
+    }
+    
+    // NEW DATE? Move old to history
     if (existingCurrent && existingCurrent.potd_date !== potdDate) {
       console.log(`🆕 New POTD detected (${potdDate}) - moving old POTD to history`);
       await query(`UPDATE scans SET is_current = false WHERE is_current = true`);
     }
     
+    // Insert new scan
     await query(`
       INSERT INTO scans (id, potd_title, potd_url, potd_date, scan_date, total_comments, total_picks, scan_duration, status, is_current)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true)
@@ -299,13 +328,35 @@ export async function saveScan(scanData) {
       scanData.status
     ]);
   } else {
+    // SQLite version
     const existingCurrent = db.prepare(`SELECT id, potd_date FROM scans WHERE is_current = 1`).get();
     
+    // SAME DATE? DELETE OLD SCANS FIRST!
+    if (existingCurrent && existingCurrent.potd_date === potdDate) {
+      console.log(`🗑️  Same POTD date (${potdDate}) - DELETING old scans...`);
+      
+      const oldScans = db.prepare(`SELECT id FROM scans WHERE potd_date = ? AND is_current = 1`).all(potdDate);
+      
+      if (oldScans && oldScans.length > 0) {
+        // Delete picks first
+        for (const scan of oldScans) {
+          db.prepare(`DELETE FROM picks WHERE scan_id = ?`).run(scan.id);
+          console.log(`   Deleted picks for scan ${scan.id}`);
+        }
+        
+        // Delete scans
+        db.prepare(`DELETE FROM scans WHERE potd_date = ? AND is_current = 1`).run(potdDate);
+        console.log(`   ✅ Deleted ${oldScans.length} old scan(s) from ${potdDate}`);
+      }
+    }
+    
+    // NEW DATE? Move old to history
     if (existingCurrent && existingCurrent.potd_date !== potdDate) {
       console.log(`🆕 New POTD detected (${potdDate}) - moving old POTD to history`);
       db.prepare(`UPDATE scans SET is_current = 0 WHERE is_current = 1`).run();
     }
     
+    // Insert new scan
     db.prepare(`
       INSERT INTO scans (id, potd_title, potd_url, potd_date, scan_date, total_comments, total_picks, scan_duration, status, is_current)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
@@ -513,22 +564,6 @@ export function optimizeDatabase() {
   db.pragma('optimize');
   db.pragma('wal_checkpoint(TRUNCATE)');
   console.log('✅ Database optimized');
-}
-
-export function removeDuplicates() {
-  if (IS_VERCEL) {
-    throw new Error('Use manual cleanup for Postgres');
-  }
-  
-  db.exec(`
-    DELETE FROM picks 
-    WHERE id NOT IN (
-      SELECT MIN(id)
-      FROM picks
-      GROUP BY scan_id, pick, event
-    )
-  `);
-  console.log('✅ Duplicates removed');
 }
 
 export async function deletePick(pickId) {
