@@ -23,7 +23,6 @@ import {
   getPickStats,
   getSchedulerLogs,
   optimizeDatabase,
-  removeDuplicates,
   deletePick,
   saveScan,
   savePicksForScan,
@@ -754,17 +753,6 @@ app.post('/api/picks/:pickId/result', verifyToken, (req, res) => {
     } else {
       res.status(404).json({ success: false, error: 'Pick not found' });
     }
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Clean duplicates (admin tool)
-app.post('/api/admin/clean-duplicates', verifyToken, (req, res) => {
-  try {
-    removeDuplicates();
-    clearCache();
-    res.json({ success: true, message: 'Duplicates removed successfully' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
